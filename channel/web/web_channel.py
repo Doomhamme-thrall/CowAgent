@@ -412,11 +412,12 @@ class WebChannel(ChatChannel):
             if model_override and isinstance(model_override, dict):
                 # If a profile_id is given, resolve it to get the actual (unmasked) api_key
                 profile_id = model_override.get("profile_id")
+                override_model_name = "unknown"
                 if profile_id:
                     custom_models = conf().get("custom_models", [])
                     profile = next((m for m in custom_models if m.get("id") == profile_id), None)
                     if profile:
-                        override_model_name = profile.get("model", model_override.get("model", ""))
+                        override_model_name = str(profile.get("model") or "")
                         model_override = {
                             "model": override_model_name,
                             "provider": profile.get("provider", "custom"),
@@ -428,7 +429,7 @@ class WebChannel(ChatChannel):
                         model_override = None
                 if model_override:
                     context["model_override"] = model_override
-                    logger.info("[WebChannel] Model override applied: model=%s", model_override.get("model", "unknown"))
+                    logger.info("[WebChannel] Model override applied: model=%s", override_model_name)
 
             if use_sse:
                 context["on_event"] = self._make_sse_callback(request_id)
