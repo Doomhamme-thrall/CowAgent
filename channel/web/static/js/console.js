@@ -3026,24 +3026,43 @@ function renderCustomModelsList() {
     availableCustomModels.forEach(m => {
         const row = document.createElement('div');
         row.className = 'flex items-center gap-3 p-3 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5';
-        row.innerHTML = `
-            <div class="w-8 h-8 rounded-lg bg-violet-50 dark:bg-violet-900/20 flex items-center justify-center flex-shrink-0">
-                <i class="fas fa-microchip text-violet-400 text-xs"></i>
-            </div>
-            <div class="flex-1 min-w-0">
-                <div class="text-sm font-medium text-slate-700 dark:text-slate-200 truncate">${m.name}</div>
-                <div class="text-xs text-slate-400 font-mono truncate">${m.model}${m.api_base ? ' · ' + m.api_base : ''}</div>
-            </div>
-            <div class="flex items-center gap-1 flex-shrink-0">
-                <button class="p-1.5 rounded-lg text-slate-400 hover:text-primary-500 hover:bg-primary-50 dark:hover:bg-primary-900/20 cursor-pointer transition-colors"
-                        onclick="openEditModelModal('${m.id}')" title="${t('config_edit_model')}">
-                    <i class="fas fa-pen text-xs"></i>
-                </button>
-                <button class="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 cursor-pointer transition-colors"
-                        onclick="deleteModelProfile('${m.id}', '${m.name.replace(/'/g, "\\'")}')" title="${t('config_delete_model')}">
-                    <i class="fas fa-trash text-xs"></i>
-                </button>
-            </div>`;
+
+        const iconWrap = document.createElement('div');
+        iconWrap.className = 'w-8 h-8 rounded-lg bg-violet-50 dark:bg-violet-900/20 flex items-center justify-center flex-shrink-0';
+        iconWrap.innerHTML = '<i class="fas fa-microchip text-violet-400 text-xs"></i>';
+
+        const infoWrap = document.createElement('div');
+        infoWrap.className = 'flex-1 min-w-0';
+        const nameEl = document.createElement('div');
+        nameEl.className = 'text-sm font-medium text-slate-700 dark:text-slate-200 truncate';
+        nameEl.textContent = m.name;
+        const metaEl = document.createElement('div');
+        metaEl.className = 'text-xs text-slate-400 font-mono truncate';
+        metaEl.textContent = m.model + (m.api_base ? ' · ' + m.api_base : '');
+        infoWrap.appendChild(nameEl);
+        infoWrap.appendChild(metaEl);
+
+        const btnWrap = document.createElement('div');
+        btnWrap.className = 'flex items-center gap-1 flex-shrink-0';
+
+        const editBtn = document.createElement('button');
+        editBtn.className = 'p-1.5 rounded-lg text-slate-400 hover:text-primary-500 hover:bg-primary-50 dark:hover:bg-primary-900/20 cursor-pointer transition-colors';
+        editBtn.title = t('config_edit_model');
+        editBtn.innerHTML = '<i class="fas fa-pen text-xs"></i>';
+        editBtn.addEventListener('click', () => openEditModelModal(m.id));
+
+        const delBtn = document.createElement('button');
+        delBtn.className = 'p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 cursor-pointer transition-colors';
+        delBtn.title = t('config_delete_model');
+        delBtn.innerHTML = '<i class="fas fa-trash text-xs"></i>';
+        delBtn.addEventListener('click', () => deleteModelProfile(m.id));
+
+        btnWrap.appendChild(editBtn);
+        btnWrap.appendChild(delBtn);
+
+        row.appendChild(iconWrap);
+        row.appendChild(infoWrap);
+        row.appendChild(btnWrap);
         listEl.appendChild(row);
     });
 }
@@ -3102,7 +3121,7 @@ function saveModelProfile() {
     }).catch(() => {});
 }
 
-function deleteModelProfile(modelId, modelName) {
+function deleteModelProfile(modelId) {
     showConfirmDialog({
         title: t('config_delete_model_title'),
         message: t('config_delete_model_confirm'),
