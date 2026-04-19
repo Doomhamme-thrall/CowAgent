@@ -415,13 +415,13 @@ function renderMarkdown(text) {
             return `\x02MATH${idx}\x03`;
         }
 
-        // Display math: $$...$$ or \[...\]
-        text = text.replace(/\$\$([\s\S]+?)\$\$/g, (_, tex) => storeMath(tex, true));
-        text = text.replace(/\\\[([\s\S]+?)\\\]/g, (_, tex) => storeMath(tex, true));
-        // Inline math: $...$ (single-line, non-empty, no leading/trailing space)
-        //   or \(...\)
-        text = text.replace(/\$([^\n$]+?)\$/g, (_, tex) => storeMath(tex, false));
-        text = text.replace(/\\\(([\s\S]+?)\\\)/g, (_, tex) => storeMath(tex, false));
+        // Display math: $$...$$ or \[...\]  (single combined pass)
+        text = text.replace(/\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]/g,
+            (_, t1, t2) => storeMath((t1 !== undefined ? t1 : t2), true));
+        // Inline math: $...$ — negative lookahead prevents matching currency ($5, $100)
+        //   or \(...\)  (single combined pass)
+        text = text.replace(/\$(?!\s|\d)([^\n$]+?)\$|\\\(([\s\S]+?)\\\)/g,
+            (_, t1, t2) => storeMath((t1 !== undefined ? t1 : t2), false));
 
         // Step 2: Render markdown.
         let html = md.render(text);
@@ -433,6 +433,7 @@ function renderMarkdown(text) {
                 try {
                     return katex.renderToString(tex, { displayMode: display, throwOnError: false });
                 } catch (_e) {
+                    console.warn('KaTeX rendering failed:', _e);
                     return display ? `$$${tex}$$` : `$${tex}$`;
                 }
             });
