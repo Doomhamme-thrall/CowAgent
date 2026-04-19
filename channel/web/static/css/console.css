@@ -1093,3 +1093,149 @@
     overflow: hidden;
     min-height: 2.5em;  /* ~2 lines at text-sm leading-relaxed */
 }
+
+/* =====================================================================
+   Message action buttons (retry / edit)
+   ===================================================================== */
+.msg-row { position: relative; }
+
+.msg-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+.msg-row:hover .msg-actions { opacity: 1; }
+
+/* Keep visible while editing a user message */
+.msg-row.editing .msg-actions { opacity: 0 !important; }
+
+.msg-action-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    border: none;
+    background: transparent;
+    color: #94a3b8;
+    cursor: pointer;
+    font-size: 11px;
+    padding: 0;
+    transition: background 0.12s, color 0.12s;
+}
+.msg-action-btn:hover {
+    background: rgba(100, 116, 139, 0.12);
+    color: #64748b;
+}
+.dark .msg-action-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: #94a3b8;
+}
+
+/* =====================================================================
+   Inline edit form inside a user message bubble
+   ===================================================================== */
+.edit-form-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 220px;
+}
+.edit-textarea {
+    width: 100%;
+    background: transparent;
+    border: none;
+    resize: none;
+    font-size: 13px;
+    line-height: 1.6;
+    color: inherit;
+    outline: none;
+    min-height: 48px;
+    max-height: 240px;
+    overflow-y: auto;
+    font-family: inherit;
+}
+.edit-form-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+}
+.edit-cancel-btn {
+    padding: 4px 12px;
+    border-radius: 8px;
+    border: none;
+    background: transparent;
+    font-size: 12px;
+    color: rgba(255,255,255,0.7);
+    cursor: pointer;
+    transition: background 0.12s;
+}
+.edit-cancel-btn:hover { background: rgba(255,255,255,0.15); }
+.edit-submit-btn {
+    padding: 4px 12px;
+    border-radius: 8px;
+    border: none;
+    background: rgba(255,255,255,0.9);
+    font-size: 12px;
+    color: #3b82f6;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.12s;
+}
+.edit-submit-btn:hover { background: #ffffff; }
+
+/* =====================================================================
+   Swap navigation bar (shown below a bot message when swaps exist)
+   ===================================================================== */
+.swap-nav {
+    display: flex;
+    align-items: center;
+    padding: 0 1rem 4px 3.5rem;  /* align under the bot message bubble */
+    gap: 0;
+}
+@media (min-width: 640px) {
+    .swap-nav { padding-left: 3.75rem; }
+}
+.swap-nav-inner {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.swap-nav-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+    border: none;
+    background: transparent;
+    color: #94a3b8;
+    cursor: pointer;
+    font-size: 10px;
+    padding: 0;
+    transition: background 0.12s, color 0.12s;
+}
+.swap-nav-btn:hover:not(:disabled) {
+    background: rgba(100,116,139,0.12);
+    color: #64748b;
+}
+.dark .swap-nav-btn:hover:not(:disabled) {
+    background: rgba(255,255,255,0.08);
+    color: #cbd5e1;
+}
+.swap-nav-btn:disabled {
+    opacity: 0.3;
+    cursor: default;
+}
+.swap-nav-count {
+    font-size: 11px;
+    color: #94a3b8;
+    min-width: 36px;
+    text-align: center;
+    user-select: none;
+}

@@ -725,6 +725,78 @@ class ConversationStore:
             finally:
                 conn.close()
 
+    def truncate_at_turn_from_end(
+        self,
+        session_id: str,
+        turns_from_end: int,
+        mode: str = "retry",
+    ) -> bool:
+        """
+        Truncate the conversation at a specific visible user turn counted from the end.
+
+        turns_from_end=0 targets the most recent user turn.
+
+        mode='retry': keep the target user message, delete everything after it
+                      (the assistant replies plus any subsequent turns).
+        mode='edit':  delete the target user message and everything after it.
+
+        Returns True if the session existed and a truncation was performed.
+        """
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    "SELECT seq, role, content FROM messages "
+                    "WHERE session_id = ? ORDER BY seq ASC",
+                    (session_id,),
+                ).fetchall()
+
+                visible_seqs: List[int] = []
+                for seq, role, raw_content in rows:
+                    if role != "user":
+                        continue
+                    try:
+                        content = json.loads(raw_content)
+                    except Exception:
+                        content = raw_content
+                    if _is_visible_user_message(content):
+                        visible_seqs.append(seq)
+
+                if turns_from_end >= len(visible_seqs):
+                    return False
+
+                target_seq = visible_seqs[-(turns_from_end + 1)]
+                from_seq = target_seq if mode == "edit" else target_seq + 1
+
+                with conn:
+                    conn.execute(
+                        "DELETE FROM messages WHERE session_id = ? AND seq >= ?",
+                        (session_id, from_seq),
+                    )
+                    ctx_row = conn.execute(
+                        "SELECT context_start_seq FROM sessions WHERE session_id = ?",
+                        (session_id,),
+                    ).fetchone()
+                    if ctx_row and ctx_row[0] >= from_seq:
+                        conn.execute(
+                            "UPDATE sessions SET context_start_seq = 0 "
+                            "WHERE session_id = ?",
+                            (session_id,),
+                        )
+                    conn.execute(
+                        """
+                        UPDATE sessions
+                        SET msg_count = (
+                            SELECT COUNT(*) FROM messages WHERE session_id = ?
+                        )
+                        WHERE session_id = ?
+                        """,
+                        (session_id, session_id),
+                    )
+                return True
+            finally:
+                conn.close()
+
     def get_stats(self) -> Dict[str, Any]:
         """Return basic stats keyed by channel_type, for monitoring."""
         with self._lock:
