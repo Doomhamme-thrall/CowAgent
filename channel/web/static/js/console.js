@@ -1457,7 +1457,6 @@ function createBotMessageEl(content, timestamp, requestId, msg, slotId) {
         stepsHtml = renderThinkingHtml(reasoning) + renderToolCallsHtml(toolCalls);
     }
 
-    const slotAttr = slotId ? ` data-slot="${escapeHtml(slotId)}"` : '';
     el.innerHTML = `
         <img src="assets/logo.jpg" alt="CowAgent" class="w-8 h-8 rounded-lg flex-shrink-0">
         <div class="min-w-0 flex-1 max-w-[85%]">
