@@ -15,7 +15,7 @@ import os
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -25,6 +25,7 @@ from common.log import logger
 from config import conf
 
 DEFAULT_MODEL = const.GPT_41_MINI
+DEFAULT_IMAGE_RECOGNITION_PROFILE_KEY = "default_model_vision"
 DEFAULT_TIMEOUT = 60
 MAX_TOKENS = 1000
 COMPRESS_THRESHOLD = 1_048_576  # 1 MB
@@ -110,7 +111,11 @@ class Vision(BaseTool):
         if not question:
             return ToolResult.fail("Error: 'question' parameter is required")
 
-        providers = self._resolve_providers()
+        preferred_provider, provider_error = self._resolve_preferred_provider()
+        if provider_error:
+            return ToolResult.fail(provider_error)
+
+        providers = [preferred_provider] if preferred_provider else self._resolve_providers()
         if not providers:
             return ToolResult.fail(
                 "Error: No model available for Vision.\n"
@@ -127,6 +132,45 @@ class Vision(BaseTool):
             return ToolResult.fail(f"Error: {e}")
 
         return self._call_with_fallback(providers, DEFAULT_MODEL, question, image_content)
+
+    def _resolve_preferred_provider(self) -> Tuple[Optional[VisionProvider], Optional[str]]:
+        """
+        Resolve provider from default image recognition model setting.
+
+        Returns:
+            (provider, error_message)
+        """
+        profile_id = (conf().get(DEFAULT_IMAGE_RECOGNITION_PROFILE_KEY, "") or "").strip()
+        if not profile_id:
+            return None, None
+
+        custom_models = conf().get("custom_models", [])
+        profile = next((m for m in custom_models if m.get("id") == profile_id), None)
+        if not profile:
+            return None, (
+                f"Error: '{DEFAULT_IMAGE_RECOGNITION_PROFILE_KEY}' is set to '{profile_id}', "
+                "but this model profile does not exist."
+            )
+
+        model_id = (profile.get("model") or "").strip()
+        api_key = (profile.get("api_key") or "").strip()
+        api_base = (profile.get("api_base") or "").strip().rstrip("/")
+        profile_name = profile.get("name") or profile_id
+
+        if not model_id:
+            return None, f"Error: Image recognition profile '{profile_name}' is missing model field"
+        if not api_key:
+            return None, f"Error: Image recognition profile '{profile_name}' is missing api_key field"
+        if not api_base:
+            return None, f"Error: Image recognition profile '{profile_name}' is missing api_base field"
+
+        return VisionProvider(
+            name=f"VisionProfile({profile_name})",
+            api_key=api_key,
+            api_base=api_base,
+            model_override=model_id,
+            use_bot=False,
+        ), None
 
     def _call_with_fallback(self, providers: List[VisionProvider], model: str,
                             question: str, image_content: dict) -> ToolResult:

@@ -866,6 +866,7 @@ class ConfigHandler:
         "agent_max_context_tokens", "agent_max_context_turns", "agent_max_steps",
         "enable_thinking", "web_password",
         "default_model_web", "default_model_task", "default_model_qq",
+        "default_model_vision", "default_model_image_generation",
     }
 
     @staticmethod
@@ -937,6 +938,8 @@ class ConfigHandler:
                 "default_model_web": local_config.get("default_model_web", ""),
                 "default_model_task": local_config.get("default_model_task", ""),
                 "default_model_qq": local_config.get("default_model_qq", ""),
+                "default_model_vision": local_config.get("default_model_vision", ""),
+                "default_model_image_generation": local_config.get("default_model_image_generation", ""),
             }, ensure_ascii=False)
         except Exception as e:
             logger.error(f"Error getting config: {e}")
