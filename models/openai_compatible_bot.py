@@ -109,8 +109,9 @@ class OpenAICompatibleBot:
                 request_params["tool_choice"] = kwargs.get("tool_choice", "auto")
             
             # Make API call with proper configuration
-            api_key = api_config.get('api_key')
-            api_base = api_config.get('api_base')
+            # Allow per-request overrides for custom model profiles
+            api_key = kwargs.get('api_key_override') or api_config.get('api_key')
+            api_base = kwargs.get('api_base_override') or api_config.get('api_base')
             
             if stream:
                 return self._handle_stream_response(request_params, api_key, api_base)

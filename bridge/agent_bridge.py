@@ -84,9 +84,14 @@ class AgentLLMModel(LLMModel):
         self.bot_type = bot_type
         self._bot = None
         self._bot_model = None
+        # Per-request model override: dict with keys model, api_key, api_base, provider
+        self._current_override = None
 
     @property
     def model(self):
+        override = self._current_override
+        if override and override.get("model"):
+            return override["model"]
         from config import conf
         return conf().get("model", const.GPT_41)
 
@@ -97,6 +102,28 @@ class AgentLLMModel(LLMModel):
     def _resolve_bot_type(self, model_name: str) -> str:
         """Resolve bot type from model name, matching Bridge.__init__ logic."""
         from config import conf
+
+        # If override specifies a provider, use it directly
+        override = self._current_override
+        if override and override.get("provider"):
+            provider = override["provider"]
+            # Map provider string to bot type constant
+            _provider_to_bot = {
+                "openai": const.OPENAI,
+                "custom": const.CUSTOM,
+                "claudeAPI": const.CLAUDEAPI,
+                "gemini": const.GEMINI,
+                "zhipu": const.ZHIPU_AI,
+                "dashscope": const.QWEN_DASHSCOPE,
+                "moonshot": const.MOONSHOT,
+                "minimax": const.MiniMax,
+                "deepseek": const.DEEPSEEK,
+                "doubao": const.DOUBAO,
+                "modelscope": const.MODELSCOPE,
+                "linkai": const.LINKAI,
+            }
+            if provider in _provider_to_bot:
+                return _provider_to_bot[provider]
 
         if conf().get("use_linkai", False) and conf().get("linkai_api_key"):
             return const.LINKAI
@@ -128,11 +155,16 @@ class AgentLLMModel(LLMModel):
         from models.bot_factory import create_bot
         cur_model = self.model
         cur_bot_type = self._resolve_bot_type(cur_model)
-        if self._bot is None or self._bot_model != cur_model or getattr(self, '_bot_type', None) != cur_bot_type:
+        # Also invalidate cache when override changes
+        cur_override_key = str(self._current_override)
+        if (self._bot is None or self._bot_model != cur_model
+                or getattr(self, '_bot_type', None) != cur_bot_type
+                or getattr(self, '_bot_override_key', None) != cur_override_key):
             self._bot = create_bot(cur_bot_type)
             self._bot = add_openai_compatible_support(self._bot)
             self._bot_model = cur_model
             self._bot_type = cur_bot_type
+            self._bot_override_key = cur_override_key
         return self._bot
 
     def call(self, request: LLMRequest):
@@ -174,6 +206,14 @@ class AgentLLMModel(LLMModel):
                     kwargs['thinking'] = {"type": "disabled"}
                 else:
                     kwargs['thinking'] = {"type": "enabled"} if channel_type == "web" else {"type": "disabled"}
+
+                # Apply per-request API key/base overrides from model profile
+                override = self._current_override
+                if override:
+                    if override.get("api_key"):
+                        kwargs['api_key_override'] = override["api_key"]
+                    if override.get("api_base"):
+                        kwargs['api_base_override'] = override["api_base"]
 
                 response = self.bot.call_with_tools(**kwargs)
                 return self._format_response(response)
@@ -227,6 +267,14 @@ class AgentLLMModel(LLMModel):
                     kwargs['thinking'] = {"type": "disabled"}
                 else:
                     kwargs['thinking'] = {"type": "enabled"} if channel_type == "web" else {"type": "disabled"}
+
+                # Apply per-request API key/base overrides from model profile
+                override = self._current_override
+                if override:
+                    if override.get("api_key"):
+                        kwargs['api_key_override'] = override["api_key"]
+                    if override.get("api_base"):
+                        kwargs['api_base_override'] = override["api_base"]
 
                 stream = self.bot.call_with_tools(**kwargs)
                 
@@ -410,6 +458,9 @@ class AgentBridge:
             if context and hasattr(agent, 'model'):
                 agent.model.channel_type = context.get("channel_type", "")
                 agent.model.session_id = session_id or ""
+                # Apply per-request model override (from chat model selector)
+                model_override = context.get("model_override")
+                agent.model._current_override = model_override if model_override else None
 
             # Store session_id on agent so executor can clear DB on fatal errors
             agent._current_session_id = session_id

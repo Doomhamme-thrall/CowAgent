@@ -31,5 +31,9 @@
   "agent_max_context_tokens": 50000,
   "agent_max_context_turns": 20,
   "agent_max_steps": 20,
-  "knowledge": true
+  "knowledge": true,
+  "custom_models": [],
+  "default_model_web": "",
+  "default_model_task": "",
+  "default_model_qq": ""
 }
