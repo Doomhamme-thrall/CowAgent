@@ -241,6 +241,9 @@ class AgentStreamExecutor:
                         if turn > 1:
                             logger.info(f"[Agent] Requesting explicit response from LLM...")
                             
+                            # Remember position so we can remove the injected prompt later
+                            prompt_insert_idx = len(self.messages)
+                            
                             # 添加一条消息，明确要求回复用户
                             self.messages.append({
                                 "role": "user",
@@ -254,8 +257,24 @@ class AgentStreamExecutor:
                             assistant_msg, tool_calls = self._call_llm_stream(retry_on_empty=False)
                             final_response = assistant_msg
                             
-                            # 如果还是空，才使用 fallback
-                            if not assistant_msg and not tool_calls:
+                            # Remove the injected prompt from history so it doesn't
+                            # appear as a user message in persisted conversations.
+                            # _call_llm_stream may have appended an assistant message
+                            # after the prompt, so we locate and remove only the prompt.
+                            if (prompt_insert_idx < len(self.messages)
+                                    and self.messages[prompt_insert_idx].get("role") == "user"):
+                                self.messages.pop(prompt_insert_idx)
+                                logger.debug("[Agent] Removed injected explicit-response prompt from message history")
+                            
+                            # If LLM responded with tool_calls instead of text, fall through
+                            # to the tool execution path below (don't break the loop).
+                            if tool_calls:
+                                logger.info(
+                                    f"[Agent] LLM returned tool_calls in explicit-response retry, "
+                                    f"continuing to execute tools instead of breaking"
+                                )
+                            elif not assistant_msg:
+                                # Still empty (no text and no tool_calls): use fallback
                                 logger.warning(f"[Agent] Still empty after explicit request")
                                 final_response = (
                                     "抱歉，我暂时无法生成回复。请尝试换一种方式描述你的需求，或稍后再试。"
@@ -270,12 +289,15 @@ class AgentStreamExecutor:
                     else:
                         logger.info(f"💭 {assistant_msg[:150]}{'...' if len(assistant_msg) > 150 else ''}")
                     
-                    logger.debug(f"✅ 完成 (无工具调用)")
-                    self._emit_event("turn_end", {
-                        "turn": turn,
-                        "has_tool_calls": False
-                    })
-                    break
+                    # If the explicit-response retry produced tool_calls, skip the break
+                    # and continue down to the tool execution branch in this same iteration.
+                    if not tool_calls:
+                        logger.debug(f"✅ 完成 (无工具调用)")
+                        self._emit_event("turn_end", {
+                            "turn": turn,
+                            "has_tool_calls": False
+                        })
+                        break
 
                 # Log tool calls with arguments
                 tool_calls_str = []
@@ -637,8 +659,11 @@ class AgentStreamExecutor:
                                     tool_calls_buffer[index]["arguments"] += func["arguments"]
 
                     # Preserve _gemini_raw_parts for Gemini thoughtSignature round-trip
+                    # (direct Gemini: list of parts; LinkAI proxy: base64 string of JSON parts)
                     if "_gemini_raw_parts" in delta:
                         gemini_raw_parts = delta["_gemini_raw_parts"]
+                    elif isinstance(choice, dict) and choice.get("_gemini_raw_parts"):
+                        gemini_raw_parts = choice["_gemini_raw_parts"]
 
         except Exception as e:
             error_str = str(e)
