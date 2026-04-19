@@ -10,6 +10,7 @@ Supports:
 import base64
 import json
 import os
+import re
 import threading
 import time
 
@@ -49,6 +50,11 @@ OP_HEARTBEAT_ACK = 11
 
 # Resumable error codes
 RESUMABLE_CLOSE_CODES = {4008, 4009}
+
+# Conservative chunking defaults to reduce QQ payload/rate-limit risks.
+QQ_TEXT_CHUNK_MAX_LEN = 1200
+QQ_TEXT_CHUNK_MAX_COUNT = 100
+QQ_TEXT_SEND_INTERVAL_SEC = 0.8
 
 
 @singleton
@@ -531,6 +537,61 @@ class QQChannel(ChatChannel):
     # Active send (no original message, e.g. scheduled tasks)
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _split_text_chunks(content: str,
+                           max_len: int = QQ_TEXT_CHUNK_MAX_LEN,
+                           max_count: int = QQ_TEXT_CHUNK_MAX_COUNT) -> list:
+        """Split text into sentence-level chunks for QQ send APIs."""
+        text = (content or "").strip()
+        if not text:
+            return []
+
+        chunks = []
+        # Always split by line first, then by sentence punctuation.
+        for paragraph in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+            p = paragraph.strip()
+            if not p:
+                continue
+            parts = [seg.strip() for seg in re.split(r"(?<=[。！？!?；;])", p) if seg.strip()]
+            if not parts:
+                parts = [p]
+
+            for part in parts:
+                if len(part) <= max_len:
+                    chunks.append(part)
+                    continue
+                start = 0
+                while start < len(part):
+                    chunks.append(part[start:start + max_len])
+                    start += max_len
+
+        if not chunks:
+            return [text[:max_len]]
+
+        if len(chunks) > max_count:
+            kept = chunks[:max_count]
+            rest = "".join(chunks[max_count:])
+            if rest:
+                tail = f"\n...(其余内容已省略，共{len(rest)}字符)"
+                # Keep the last chunk within max length.
+                last = kept[-1]
+                room = max_len - len(tail)
+                kept[-1] = (last[:room] if room > 0 else "") + tail
+            return kept
+        return chunks
+
+    def _batch_post_text(self, url: str, base_body: dict, content: str, event_label: str):
+        chunks = self._split_text_chunks(content)
+        if not chunks:
+            return
+        for idx, chunk in enumerate(chunks):
+            body = dict(base_body)
+            body["content"] = chunk
+            body["msg_type"] = 0
+            self._post_message(url, body, event_label)
+            if idx < len(chunks) - 1:
+                time.sleep(QQ_TEXT_SEND_INTERVAL_SEC)
+
     def _active_send_text(self, content: str, receiver: str, is_group: bool):
         """Send text without an original message (active push). QQ limits active messages to 4/month per user."""
         if not receiver:
@@ -540,25 +601,29 @@ class QQChannel(ChatChannel):
             url = f"{QQ_API_BASE}/v2/groups/{receiver}/messages"
         else:
             url = f"{QQ_API_BASE}/v2/users/{receiver}/messages"
-        body = {
-            "content": content,
-            "msg_type": 0,
-        }
+        body = {}
         event_label = "GROUP_ACTIVE" if is_group else "C2C_ACTIVE"
-        self._post_message(url, body, event_label)
+        self._batch_post_text(url, body, str(content), event_label)
 
     # ------------------------------------------------------------------
     # Send text
     # ------------------------------------------------------------------
 
     def _send_text(self, content: str, msg: QQMessage, event_type: str, msg_id: str):
-        url, body, _, _ = self._build_msg_url_and_base_body(msg, event_type, msg_id)
-        if not url:
-            logger.warning(f"[QQ] Cannot send reply for event_type: {event_type}")
+        chunks = self._split_text_chunks(str(content))
+        if not chunks:
             return
-        body["content"] = content
-        body["msg_type"] = 0
-        self._post_message(url, body, event_type)
+
+        for idx, chunk in enumerate(chunks):
+            url, body, _, _ = self._build_msg_url_and_base_body(msg, event_type, msg_id)
+            if not url:
+                logger.warning(f"[QQ] Cannot send reply for event_type: {event_type}")
+                return
+            body["content"] = chunk
+            body["msg_type"] = 0
+            self._post_message(url, body, event_type)
+            if idx < len(chunks) - 1:
+                time.sleep(QQ_TEXT_SEND_INTERVAL_SEC)
 
     # ------------------------------------------------------------------
     # Rich media upload & send (image / video / file)

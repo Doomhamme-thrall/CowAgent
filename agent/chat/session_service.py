@@ -12,6 +12,29 @@ from typing import Optional
 from common.log import logger
 
 
+_INVALID_TITLE_TEXTS = {
+    "我现在有点累了，等会再来吧",
+    "提问太快啦，请休息一下再问我吧",
+    "我没有收到你的消息",
+    "我连接不到你的网络",
+}
+
+
+def _is_valid_generated_title(title: str, result: dict) -> bool:
+    """Validate model-generated title to avoid persisting generic error text."""
+    if not title:
+        return False
+    if len(title) > 50:
+        return False
+    if title in _INVALID_TITLE_TEXTS:
+        return False
+
+    completion_tokens = result.get("completion_tokens")
+    if completion_tokens == 0:
+        return False
+    return True
+
+
 def generate_session_title(user_message: str, assistant_reply: str = "") -> str:
     """
     Generate a short session title by calling the current bot's reply_text.
@@ -37,10 +60,12 @@ def generate_session_title(user_message: str, assistant_reply: str = "") -> str:
         ]
 
         result = bot.reply_text(session)
+        if not isinstance(result, dict):
+            result = {}
         raw = (result.get("content") or "").strip()
         title = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL).strip().strip('"\'')
         logger.info(f"[SessionService] Title generation result: '{title}' (len={len(title)})")
-        if title and len(title) <= 50:
+        if _is_valid_generated_title(title, result):
             return title
     except Exception as e:
         logger.warning(f"[SessionService] Title generation failed: {e}")
