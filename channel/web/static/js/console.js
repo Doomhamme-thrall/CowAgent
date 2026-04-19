@@ -406,7 +406,44 @@ function injectImagePreviews(html) {
 
 function renderMarkdown(text) {
     try {
-        const html = md.render(text);
+        // Step 1: Extract LaTeX blocks before markdown-it processes them,
+        // replacing them with unique placeholders that markdown-it won't mangle.
+        const mathStore = [];
+        function storeMath(tex, display) {
+            const idx = mathStore.length;
+            mathStore.push({ tex, display });
+            return `\x02MATH${idx}\x03`;
+        }
+
+        // Display math: $$...$$ or \[...\]
+        text = text.replace(/\$\$([\s\S]+?)\$\$/g, (_, tex) => storeMath(tex, true));
+        text = text.replace(/\\\[([\s\S]+?)\\\]/g, (_, tex) => storeMath(tex, true));
+        // Inline math: $...$ (single-line, non-empty, no leading/trailing space)
+        //   or \(...\)
+        text = text.replace(/\$([^\n$]+?)\$/g, (_, tex) => storeMath(tex, false));
+        text = text.replace(/\\\(([\s\S]+?)\\\)/g, (_, tex) => storeMath(tex, false));
+
+        // Step 2: Render markdown.
+        let html = md.render(text);
+
+        // Step 3: Replace placeholders with KaTeX-rendered HTML.
+        if (mathStore.length && window.katex) {
+            html = html.replace(/\x02MATH(\d+)\x03/g, (_, idxStr) => {
+                const { tex, display } = mathStore[parseInt(idxStr, 10)];
+                try {
+                    return katex.renderToString(tex, { displayMode: display, throwOnError: false });
+                } catch (_e) {
+                    return display ? `$$${tex}$$` : `$${tex}$`;
+                }
+            });
+        } else if (mathStore.length) {
+            // KaTeX not loaded — restore original delimiters.
+            html = html.replace(/\x02MATH(\d+)\x03/g, (_, idxStr) => {
+                const { tex, display } = mathStore[parseInt(idxStr, 10)];
+                return display ? `$$${tex}$$` : `$${tex}$`;
+            });
+        }
+
         // Order matters: video first (more specific), then image.
         return injectImagePreviews(injectVideoPlayers(html));
     }
