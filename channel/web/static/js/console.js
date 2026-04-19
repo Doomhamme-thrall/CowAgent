@@ -97,6 +97,26 @@ const I18N = {
         error_send: '发送失败，请稍后再试。', error_timeout: '请求超时，请再试一次。',
         thinking_in_progress: '思考中...', thinking_done: '已深度思考', thinking_duration: '耗时',
         retry: '重试', edit_message: '编辑', edit_submit: '提交',
+        config_default_models: '默认模型设置',
+        config_default_model_web: 'Web 对话默认模型',
+        config_default_model_task: '定时任务默认模型',
+        config_default_model_qq: 'QQ 机器人默认模型',
+        config_default_model_hint: '选择「全局」将使用配置文件中的主模型；选择自定义模型配置则优先使用该模型',
+        config_custom_models: '自定义模型配置',
+        config_custom_models_hint: '自定义 BaseURL、API Key 和模型名称，支持任意 OpenAI 兼容接口',
+        config_custom_models_empty: '暂无自定义模型，点击「添加模型」开始配置',
+        config_add_model: '添加模型',
+        config_edit_model: '编辑',
+        config_delete_model: '删除',
+        config_model_profile_name: '配置名称',
+        config_model_profile_name_hint: '例如：我的 GPT-4',
+        config_model_id_hint: '例如：gpt-4-turbo',
+        config_delete_model_confirm: '确认删除该模型配置？',
+        config_delete_model_title: '删除模型',
+        model_selector_title: '选择模型',
+        model_selector_global: '全局模型',
+        model_selector_custom: '自定义模型',
+        config_default_global: '全局（使用配置文件主模型）',
         swap_version: '版本',
     },
     en: {
@@ -185,6 +205,26 @@ const I18N = {
         error_send: 'Failed to send. Please try again.', error_timeout: 'Request timeout. Please try again.',
         thinking_in_progress: 'Thinking...', thinking_done: 'Thought', thinking_duration: 'Duration',
         retry: 'Retry', edit_message: 'Edit', edit_submit: 'Submit',
+        config_default_models: 'Default Model Settings',
+        config_default_model_web: 'Web Chat Default Model',
+        config_default_model_task: 'Scheduled Task Default Model',
+        config_default_model_qq: 'QQ Bot Default Model',
+        config_default_model_hint: 'Selecting "Global" uses the main model from config; selecting a custom model profile uses it preferentially',
+        config_custom_models: 'Custom Model Profiles',
+        config_custom_models_hint: 'Custom BaseURL, API Key, and model name — supports any OpenAI-compatible API',
+        config_custom_models_empty: 'No custom models yet. Click "Add Model" to get started.',
+        config_add_model: 'Add Model',
+        config_edit_model: 'Edit',
+        config_delete_model: 'Delete',
+        config_model_profile_name: 'Profile Name',
+        config_model_profile_name_hint: 'e.g. My GPT-4',
+        config_model_id_hint: 'e.g. gpt-4-turbo',
+        config_delete_model_confirm: 'Delete this model profile?',
+        config_delete_model_title: 'Delete Model',
+        model_selector_title: 'Select Model',
+        model_selector_global: 'Global Model',
+        model_selector_custom: 'Custom Models',
+        config_default_global: 'Global (use main config model)',
         swap_version: 'Version',
     }
 };
@@ -210,6 +250,8 @@ function applyI18n() {
     });
     const langLabel = document.getElementById('lang-label');
     if (langLabel) langLabel.textContent = currentLang === 'zh' ? '中文' : 'EN';
+    // Update model selector label (uses i18n key for global label)
+    if (typeof updateModelSelectorLabel === 'function') updateModelSelectorLabel();
 }
 
 function toggleLanguage() {
@@ -460,6 +502,117 @@ let loadingContainers = {};
 let activeStreams = {};   // request_id -> EventSource
 let isComposing = false;
 let appConfig = { use_agent: false, title: 'CowAgent', subtitle: '', providers: {}, api_bases: {} };
+
+// =====================================================================
+// Model Selector State
+// =====================================================================
+// selectedModelProfile: null = use global config, or {id, name, model, api_key, api_base, provider}
+let selectedModelProfile = null;
+let availableCustomModels = [];  // fetched from /api/models
+
+function getModelOverride() {
+    if (!selectedModelProfile) return null;
+    // Send the profile ID so the backend can look up the actual api_key
+    return {
+        profile_id: selectedModelProfile.id,
+        model: selectedModelProfile.model,
+        provider: selectedModelProfile.provider || 'custom',
+        api_base: selectedModelProfile.api_base || '',
+    };
+}
+
+function toggleModelSelector(e) {
+    e.stopPropagation();
+    const menu = document.getElementById('model-selector-menu');
+    menu.classList.toggle('hidden');
+    if (!menu.classList.contains('hidden')) {
+        buildModelSelectorMenu();
+    }
+}
+
+function buildModelSelectorMenu() {
+    const list = document.getElementById('model-selector-list');
+    list.innerHTML = '';
+
+    // Global model option
+    const globalItem = document.createElement('button');
+    const isGlobal = selectedModelProfile === null;
+    globalItem.className = `w-full text-left px-3 py-2 text-sm hover:bg-slate-50 dark:hover:bg-white/5 cursor-pointer flex items-center gap-2 ${isGlobal ? 'text-primary-500 font-medium' : 'text-slate-700 dark:text-slate-200'}`;
+    globalItem.innerHTML = `<i class="fas fa-globe text-xs ${isGlobal ? 'text-primary-500' : 'text-slate-400'}"></i><span>${t('model_selector_global')}</span>${isGlobal ? '<i class="fas fa-check text-xs ml-auto text-primary-500"></i>' : ''}`;
+    globalItem.onclick = () => selectModelProfile(null);
+    list.appendChild(globalItem);
+
+    if (availableCustomModels.length > 0) {
+        // Separator + label
+        const sep = document.createElement('div');
+        sep.className = 'px-3 py-1.5 text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider border-t border-slate-100 dark:border-white/10 mt-1 pt-2';
+        sep.textContent = t('model_selector_custom');
+        list.appendChild(sep);
+
+        availableCustomModels.forEach(m => {
+            const isSelected = selectedModelProfile && selectedModelProfile.id === m.id;
+            const btn = document.createElement('button');
+            btn.className = `w-full text-left px-3 py-2 text-sm hover:bg-slate-50 dark:hover:bg-white/5 cursor-pointer flex items-center gap-2 ${isSelected ? 'text-primary-500 font-medium' : 'text-slate-700 dark:text-slate-200'}`;
+            btn.innerHTML = `<i class="fas fa-microchip text-xs ${isSelected ? 'text-primary-500' : 'text-slate-400'}"></i><div class="flex-1 min-w-0"><div class="truncate">${m.name}</div><div class="text-xs text-slate-400 truncate font-mono">${m.model}</div></div>${isSelected ? '<i class="fas fa-check text-xs ml-auto text-primary-500"></i>' : ''}`;
+            btn.onclick = () => selectModelProfile(m);
+            list.appendChild(btn);
+        });
+    }
+}
+
+function selectModelProfile(profile) {
+    selectedModelProfile = profile;
+    updateModelSelectorLabel();
+    document.getElementById('model-selector-menu').classList.add('hidden');
+}
+
+function updateModelSelectorLabel() {
+    const label = document.getElementById('model-selector-label');
+    if (!label) return;
+    if (!selectedModelProfile) {
+        label.textContent = t('model_selector_global');
+    } else {
+        label.textContent = selectedModelProfile.name;
+    }
+}
+
+// Close model selector on outside click
+document.addEventListener('click', (e) => {
+    const wrap = document.getElementById('model-selector-wrap');
+    if (wrap && !wrap.contains(e.target)) {
+        const menu = document.getElementById('model-selector-menu');
+        if (menu) menu.classList.add('hidden');
+    }
+});
+
+async function loadCustomModels() {
+    try {
+        const r = await fetch('/api/models');
+        const data = await r.json();
+        if (data.status === 'success') {
+            availableCustomModels = data.models || [];
+            // If current selected model no longer exists, reset to global
+            if (selectedModelProfile) {
+                const still = availableCustomModels.find(m => m.id === selectedModelProfile.id);
+                if (!still) selectedModelProfile = null;
+            }
+            updateModelSelectorLabel();
+            return data.models || [];
+        }
+    } catch (e) {}
+    return [];
+}
+
+function _applyDefaultWebModel() {
+    const defaultId = appConfig && appConfig.default_model_web;
+    if (!defaultId) {
+        selectedModelProfile = null;
+    } else {
+        const profile = availableCustomModels.find(m => m.id === defaultId);
+        selectedModelProfile = profile || null;
+    }
+    updateModelSelectorLabel();
+}
 
 // ---- Message swap / retry state ----
 // messageSwaps[slotId] = array of {userText, userBubbleHtml, botBubbleHtml, timestamp}
@@ -963,6 +1116,10 @@ function sendMessage() {
             file_name: a.file_name,
             file_type: a.file_type,
         }));
+    }
+    const override = getModelOverride();
+    if (override) {
+        body.model_override = override;
     }
 
     const MAX_RETRIES = 2;
@@ -1695,10 +1852,13 @@ async function retryMessage(botEl) {
     // Show loading and re-send the same user message
     const loadingEl = addLoadingIndicator();
     const ts = new Date();
+    const retryBody = { session_id: sessionId, message: userText, stream: true };
+    const override = getModelOverride();
+    if (override) retryBody.model_override = override;
     fetch('/message', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId, message: userText, stream: true }),
+        body: JSON.stringify(retryBody),
     })
     .then(r => r.json())
     .then(data => {
@@ -1954,6 +2114,10 @@ function newChat() {
     // Clear swap state for the previous session
     Object.keys(messageSwaps).forEach(k => delete messageSwaps[k]);
     Object.keys(swapCurrentIdx).forEach(k => delete swapCurrentIdx[k]);
+
+    // Apply default model for new web chats if configured
+    _applyDefaultWebModel();
+
     startPolling();  // bump generation so old loop self-cancels, new loop uses fresh sessionId
     messagesDiv.innerHTML = '';
     const ws = document.createElement('div');
@@ -2837,12 +3001,201 @@ function loadConfigView() {
         if (data.status !== 'success') return;
         appConfig = data;
         initConfigView(data);
+        // Load custom models and populate UI
+        availableCustomModels = data.custom_models || [];
+        renderCustomModelsList();
+        populateDefaultModelSelects(data);
+        updateModelSelectorLabel();
     }).catch(() => {});
 }
 
 // =====================================================================
-// Skills View
+// Custom Model Profiles Management
 // =====================================================================
+
+function renderCustomModelsList() {
+    const listEl = document.getElementById('custom-models-list');
+    const emptyEl = document.getElementById('custom-models-empty');
+    if (!listEl || !emptyEl) return;
+    listEl.innerHTML = '';
+    if (!availableCustomModels || availableCustomModels.length === 0) {
+        emptyEl.classList.remove('hidden');
+        return;
+    }
+    emptyEl.classList.add('hidden');
+    availableCustomModels.forEach(m => {
+        const row = document.createElement('div');
+        row.className = 'flex items-center gap-3 p-3 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5';
+
+        const iconWrap = document.createElement('div');
+        iconWrap.className = 'w-8 h-8 rounded-lg bg-violet-50 dark:bg-violet-900/20 flex items-center justify-center flex-shrink-0';
+        iconWrap.innerHTML = '<i class="fas fa-microchip text-violet-400 text-xs"></i>';
+
+        const infoWrap = document.createElement('div');
+        infoWrap.className = 'flex-1 min-w-0';
+        const nameEl = document.createElement('div');
+        nameEl.className = 'text-sm font-medium text-slate-700 dark:text-slate-200 truncate';
+        nameEl.textContent = m.name;
+        const metaEl = document.createElement('div');
+        metaEl.className = 'text-xs text-slate-400 font-mono truncate';
+        metaEl.textContent = m.model + (m.api_base ? ' · ' + m.api_base : '');
+        infoWrap.appendChild(nameEl);
+        infoWrap.appendChild(metaEl);
+
+        const btnWrap = document.createElement('div');
+        btnWrap.className = 'flex items-center gap-1 flex-shrink-0';
+
+        const editBtn = document.createElement('button');
+        editBtn.className = 'p-1.5 rounded-lg text-slate-400 hover:text-primary-500 hover:bg-primary-50 dark:hover:bg-primary-900/20 cursor-pointer transition-colors';
+        editBtn.title = t('config_edit_model');
+        editBtn.innerHTML = '<i class="fas fa-pen text-xs"></i>';
+        editBtn.addEventListener('click', () => openEditModelModal(m.id));
+
+        const delBtn = document.createElement('button');
+        delBtn.className = 'p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 cursor-pointer transition-colors';
+        delBtn.title = t('config_delete_model');
+        delBtn.innerHTML = '<i class="fas fa-trash text-xs"></i>';
+        delBtn.addEventListener('click', () => deleteModelProfile(m.id));
+
+        btnWrap.appendChild(editBtn);
+        btnWrap.appendChild(delBtn);
+
+        row.appendChild(iconWrap);
+        row.appendChild(infoWrap);
+        row.appendChild(btnWrap);
+        listEl.appendChild(row);
+    });
+}
+
+function openAddModelModal() {
+    document.getElementById('model-modal-id').value = '';
+    document.getElementById('model-modal-name').value = '';
+    document.getElementById('model-modal-model').value = '';
+    document.getElementById('model-modal-apikey').value = '';
+    document.getElementById('model-modal-apibase').value = '';
+    document.getElementById('model-modal-title').dataset.i18n = 'config_add_model';
+    document.getElementById('model-modal-title').textContent = t('config_add_model');
+    document.getElementById('model-modal-overlay').classList.remove('hidden');
+}
+
+function openEditModelModal(modelId) {
+    const m = availableCustomModels.find(x => x.id === modelId);
+    if (!m) return;
+    document.getElementById('model-modal-id').value = m.id;
+    document.getElementById('model-modal-name').value = m.name;
+    document.getElementById('model-modal-model').value = m.model;
+    document.getElementById('model-modal-apikey').value = m.api_key || '';
+    document.getElementById('model-modal-apibase').value = m.api_base || '';
+    document.getElementById('model-modal-title').dataset.i18n = 'config_edit_model';
+    document.getElementById('model-modal-title').textContent = t('config_edit_model');
+    document.getElementById('model-modal-overlay').classList.remove('hidden');
+}
+
+function closeModelModal() {
+    document.getElementById('model-modal-overlay').classList.add('hidden');
+}
+
+function saveModelProfile() {
+    const id = document.getElementById('model-modal-id').value;
+    const name = document.getElementById('model-modal-name').value.trim();
+    const model = document.getElementById('model-modal-model').value.trim();
+    const api_key = document.getElementById('model-modal-apikey').value.trim();
+    const api_base = document.getElementById('model-modal-apibase').value.trim();
+    if (!name || !model) return;
+
+    const payload = { name, model, api_key, api_base, provider: 'custom' };
+    const isEdit = !!id;
+    const url = isEdit ? `/api/models/${id}` : '/api/models';
+    const method = isEdit ? 'PUT' : 'POST';
+
+    fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    }).then(r => r.json()).then(data => {
+        if (data.status === 'success') {
+            closeModelModal();
+            loadConfigView();
+            loadCustomModels();
+        }
+    }).catch(() => {});
+}
+
+function deleteModelProfile(modelId) {
+    showConfirmDialog({
+        title: t('config_delete_model_title'),
+        message: t('config_delete_model_confirm'),
+        okText: t('confirm_yes'),
+        cancelText: t('confirm_cancel'),
+        onConfirm: () => {
+            fetch(`/api/models/${modelId}`, { method: 'DELETE' })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        loadConfigView();
+                        loadCustomModels();
+                    }
+                }).catch(() => {});
+        },
+    });
+}
+
+// =====================================================================
+// Default Model Selectors
+// =====================================================================
+
+function _buildDefaultModelOptions(customModels) {
+    const opts = [{ value: '', label: t('config_default_global') }];
+    (customModels || []).forEach(m => {
+        opts.push({ value: m.id, label: `${m.name} (${m.model})` });
+    });
+    return opts;
+}
+
+function populateDefaultModelSelects(data) {
+    const selects = [
+        { id: 'cfg-default-model-web', key: 'default_model_web' },
+        { id: 'cfg-default-model-task', key: 'default_model_task' },
+        { id: 'cfg-default-model-qq', key: 'default_model_qq' },
+    ];
+    const opts = _buildDefaultModelOptions(data.custom_models || []);
+    selects.forEach(({ id, key }) => {
+        const sel = document.getElementById(id);
+        if (!sel) return;
+        sel.innerHTML = '';
+        opts.forEach(o => {
+            const opt = document.createElement('option');
+            opt.value = o.value;
+            opt.textContent = o.label;
+            if (o.value === (data[key] || '')) opt.selected = true;
+            sel.appendChild(opt);
+        });
+    });
+}
+
+function saveDefaultModels() {
+    const updates = {
+        default_model_web: document.getElementById('cfg-default-model-web')?.value || '',
+        default_model_task: document.getElementById('cfg-default-model-task')?.value || '',
+        default_model_qq: document.getElementById('cfg-default-model-qq')?.value || '',
+    };
+    const btn = document.getElementById('cfg-default-models-save');
+    if (btn) btn.disabled = true;
+    fetch('/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ updates }),
+    }).then(r => r.json()).then(data => {
+        if (data.status === 'success') {
+            showStatus('cfg-default-models-status', 'config_saved', false);
+        } else {
+            showStatus('cfg-default-models-status', 'config_save_error', true);
+        }
+    }).catch(() => showStatus('cfg-default-models-status', 'config_save_error', true))
+    .finally(() => { if (btn) btn.disabled = false; });
+}
+
+
 let toolsLoaded = false;
 
 const TOOL_ICONS = {
@@ -4544,6 +4897,10 @@ function initApp() {
     applyI18n();
     _applyInputTooltips();
     _restoreSessionPanel();
+
+    // Initialize model selector
+    updateModelSelectorLabel();
+    loadCustomModels();
 
     fetch('/api/knowledge/list').then(r => r.json()).then(data => {
         if (data.status === 'success') {

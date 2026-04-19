@@ -358,6 +358,8 @@ class WebChannel(ChatChannel):
             prompt = json_data.get('message', '')
             use_sse = json_data.get('stream', True)
             attachments = json_data.get('attachments', [])
+            # Per-message model override: {model, provider, api_key, api_base}
+            model_override = json_data.get('model_override') or None
 
             # Append file references to the prompt (same format as QQ channel)
             if attachments:
@@ -406,6 +408,28 @@ class WebChannel(ChatChannel):
             context["session_id"] = session_id
             context["receiver"] = session_id
             context["request_id"] = request_id
+
+            if model_override and isinstance(model_override, dict):
+                # If a profile_id is given, resolve it to get the actual (unmasked) api_key
+                profile_id = model_override.get("profile_id")
+                override_model_name = "unknown"
+                if profile_id:
+                    custom_models = conf().get("custom_models", [])
+                    profile = next((m for m in custom_models if m.get("id") == profile_id), None)
+                    if profile:
+                        override_model_name = str(profile.get("model") or "")
+                        model_override = {
+                            "model": override_model_name,
+                            "provider": profile.get("provider", "custom"),
+                            "api_key": profile.get("api_key", ""),
+                            "api_base": profile.get("api_base", ""),
+                        }
+                    else:
+                        logger.warning(f"[WebChannel] Unknown model profile_id: {profile_id}")
+                        model_override = None
+                if model_override:
+                    context["model_override"] = model_override
+                    logger.info("[WebChannel] Model override applied: model=%s", override_model_name)
 
             if use_sse:
                 context["on_event"] = self._make_sse_callback(request_id)
@@ -552,6 +576,8 @@ class WebChannel(ChatChannel):
             '/api/history', 'HistoryHandler',
             '/api/logs', 'LogsHandler',
             '/api/version', 'VersionHandler',
+            '/api/models/(.*)', 'ModelDetailHandler',
+            '/api/models', 'ModelsHandler',
             '/assets/(.*)', 'AssetsHandler',
         )
         app = web.application(urls, globals(), autoreload=False)
@@ -839,6 +865,7 @@ class ConfigHandler:
         "ark_api_key", "minimax_api_key", "linkai_api_key", "custom_api_key",
         "agent_max_context_tokens", "agent_max_context_turns", "agent_max_steps",
         "enable_thinking", "web_password",
+        "default_model_web", "default_model_task", "default_model_qq",
     }
 
     @staticmethod
@@ -880,6 +907,16 @@ class ConfigHandler:
             raw_pwd = local_config.get("web_password", "")
             masked_pwd = ("*" * len(raw_pwd)) if raw_pwd else ""
 
+            # Custom model profiles (stored as list in config)
+            custom_models = local_config.get("custom_models", [])
+            # Mask api_keys in custom models for display
+            masked_custom_models = []
+            for m in custom_models:
+                cm = dict(m)
+                if cm.get("api_key"):
+                    cm["api_key"] = self._mask_key(cm["api_key"])
+                masked_custom_models.append(cm)
+
             return json.dumps({
                 "status": "success",
                 "use_agent": use_agent,
@@ -896,6 +933,10 @@ class ConfigHandler:
                 "api_keys": api_keys_masked,
                 "providers": providers,
                 "web_password_masked": masked_pwd,
+                "custom_models": masked_custom_models,
+                "default_model_web": local_config.get("default_model_web", ""),
+                "default_model_task": local_config.get("default_model_task", ""),
+                "default_model_qq": local_config.get("default_model_qq", ""),
             }, ensure_ascii=False)
         except Exception as e:
             logger.error(f"Error getting config: {e}")
@@ -940,6 +981,143 @@ class ConfigHandler:
             return json.dumps({"status": "success", "applied": applied}, ensure_ascii=False)
         except Exception as e:
             logger.error(f"Error updating config: {e}")
+            return json.dumps({"status": "error", "message": str(e)})
+
+
+class ModelsHandler:
+    """API for managing custom model profiles (CRUD)."""
+
+    @staticmethod
+    def _config_path():
+        return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__)))), "config.json")
+
+    @staticmethod
+    def _read_models():
+        return conf().get("custom_models", [])
+
+    @staticmethod
+    def _save_models(models):
+        """Persist custom_models list to both in-memory conf and config.json."""
+        conf()["custom_models"] = models
+        cp = ModelsHandler._config_path()
+        if os.path.exists(cp):
+            with open(cp, "r", encoding="utf-8") as f:
+                file_cfg = json.load(f)
+        else:
+            file_cfg = {}
+        file_cfg["custom_models"] = models
+        with open(cp, "w", encoding="utf-8") as f:
+            json.dump(file_cfg, f, indent=4, ensure_ascii=False)
+
+    @staticmethod
+    def _mask_key(value: str) -> str:
+        if not value or len(value) <= 8:
+            return value
+        return value[:4] + "*" * (len(value) - 8) + value[-4:]
+
+    def GET(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            models = self._read_models()
+            masked = []
+            for m in models:
+                cm = dict(m)
+                if cm.get("api_key"):
+                    cm["api_key"] = self._mask_key(cm["api_key"])
+                masked.append(cm)
+            return json.dumps({"status": "success", "models": masked}, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[ModelsHandler] GET error: {e}")
+            return json.dumps({"status": "error", "message": str(e)})
+
+    def POST(self):
+        """Create a new custom model profile."""
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            body = json.loads(web.data())
+            name = (body.get("name") or "").strip()
+            model = (body.get("model") or "").strip()
+            if not name or not model:
+                return json.dumps({"status": "error", "message": "name and model are required"})
+            profile = {
+                "id": str(uuid.uuid4()),
+                "name": name,
+                "model": model,
+                "api_key": (body.get("api_key") or "").strip(),
+                "api_base": (body.get("api_base") or "").strip(),
+                "provider": (body.get("provider") or "custom").strip(),
+            }
+            models = list(self._read_models())
+            models.append(profile)
+            self._save_models(models)
+            logger.info(f"[ModelsHandler] Created model profile: {name}")
+            display = dict(profile)
+            if display.get("api_key"):
+                display["api_key"] = self._mask_key(display["api_key"])
+            return json.dumps({"status": "success", "model": display}, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[ModelsHandler] POST error: {e}")
+            return json.dumps({"status": "error", "message": str(e)})
+
+
+class ModelDetailHandler:
+    """Handle single custom model profile by ID: PUT (update) / DELETE."""
+
+    @staticmethod
+    def _mask_key(value: str) -> str:
+        if not value or len(value) <= 8:
+            return value
+        return value[:4] + "*" * (len(value) - 8) + value[-4:]
+
+    def PUT(self, model_id):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            body = json.loads(web.data())
+            models = list(conf().get("custom_models", []))
+            idx = next((i for i, m in enumerate(models) if m.get("id") == model_id), None)
+            if idx is None:
+                return json.dumps({"status": "error", "message": "model not found"})
+            profile = dict(models[idx])
+            if body.get("name"):
+                profile["name"] = body["name"].strip()
+            if body.get("model"):
+                profile["model"] = body["model"].strip()
+            if body.get("api_base") is not None:
+                profile["api_base"] = body["api_base"].strip()
+            if body.get("provider"):
+                profile["provider"] = body["provider"].strip()
+            # Only update api_key if a new (non-masked) value is provided
+            new_key = body.get("api_key", "")
+            if new_key and "*" * 4 not in new_key:
+                profile["api_key"] = new_key.strip()
+            models[idx] = profile
+            ModelsHandler._save_models(models)
+            logger.info(f"[ModelsHandler] Updated model profile: {profile.get('name')}")
+            display = dict(profile)
+            if display.get("api_key"):
+                display["api_key"] = self._mask_key(display["api_key"])
+            return json.dumps({"status": "success", "model": display}, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[ModelsHandler] PUT error: {e}")
+            return json.dumps({"status": "error", "message": str(e)})
+
+    def DELETE(self, model_id):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            models = list(conf().get("custom_models", []))
+            new_models = [m for m in models if m.get("id") != model_id]
+            if len(new_models) == len(models):
+                return json.dumps({"status": "error", "message": "model not found"})
+            ModelsHandler._save_models(new_models)
+            logger.info(f"[ModelsHandler] Deleted model profile: {model_id}")
+            return json.dumps({"status": "success"}, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[ModelsHandler] DELETE error: {e}")
             return json.dumps({"status": "error", "message": str(e)})
 
 
