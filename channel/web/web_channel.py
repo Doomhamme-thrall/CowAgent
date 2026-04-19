@@ -547,6 +547,7 @@ class WebChannel(ChatChannel):
             '/api/sessions', 'SessionsHandler',
             '/api/sessions/(.*)/generate_title', 'SessionTitleHandler',
             '/api/sessions/(.*)/clear_context', 'SessionClearContextHandler',
+            '/api/sessions/(.*)/rollback', 'SessionRollbackHandler',
             '/api/sessions/(.*)', 'SessionDetailHandler',
             '/api/history', 'HistoryHandler',
             '/api/logs', 'LogsHandler',
@@ -1711,6 +1712,59 @@ class SessionClearContextHandler:
             return json.dumps({"status": "success", "context_start_seq": new_seq})
         except Exception as e:
             logger.error(f"[WebChannel] Clear context error: {e}")
+            return json.dumps({"status": "error", "message": str(e)})
+
+
+class SessionRollbackHandler:
+    """Roll back the conversation to a specific turn so the UI can retry or edit messages.
+
+    POST /api/sessions/{session_id}/rollback
+    Body:
+        {
+            "turns_from_end": <int>,   # 0 = most recent user turn
+            "mode": "retry" | "edit"   # retry keeps user msg, edit removes it too
+        }
+    """
+
+    def POST(self, session_id: str):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            if not session_id:
+                return json.dumps({"status": "error", "message": "session_id required"})
+
+            body = json.loads(web.data())
+            turns_from_end = int(body.get("turns_from_end", 0))
+            mode = body.get("mode", "retry")
+
+            if mode not in ("retry", "edit"):
+                return json.dumps({"status": "error", "message": "mode must be 'retry' or 'edit'"})
+
+            from agent.memory import get_conversation_store
+            store = get_conversation_store()
+            ok = store.truncate_at_turn_from_end(session_id, turns_from_end, mode)
+            if not ok:
+                return json.dumps({"status": "error", "message": "turn not found"})
+
+            # Reset the agent instance so it rebuilds context from the truncated history
+            try:
+                from bridge.bridge import Bridge
+                ab = Bridge().get_agent_bridge()
+                if session_id in ab.agents:
+                    del ab.agents[session_id]
+                    logger.info(
+                        f"[WebChannel] Cleared agent instance after rollback: session={session_id}"
+                    )
+            except Exception:
+                pass
+
+            logger.info(
+                f"[WebChannel] Rollback: session={session_id}, "
+                f"turns_from_end={turns_from_end}, mode={mode}"
+            )
+            return json.dumps({"status": "success"})
+        except Exception as e:
+            logger.error(f"[WebChannel] Rollback error: {e}")
             return json.dumps({"status": "error", "message": str(e)})
 
 

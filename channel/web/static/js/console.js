@@ -96,6 +96,8 @@ const I18N = {
         confirm_cancel: '取消',
         error_send: '发送失败，请稍后再试。', error_timeout: '请求超时，请再试一次。',
         thinking_in_progress: '思考中...', thinking_done: '已深度思考', thinking_duration: '耗时',
+        retry: '重试', edit_message: '编辑', edit_submit: '提交',
+        swap_version: '版本',
     },
     en: {
         console: 'Console',
@@ -182,6 +184,8 @@ const I18N = {
         confirm_cancel: 'Cancel',
         error_send: 'Failed to send. Please try again.', error_timeout: 'Request timeout. Please try again.',
         thinking_in_progress: 'Thinking...', thinking_done: 'Thought', thinking_duration: 'Duration',
+        retry: 'Retry', edit_message: 'Edit', edit_submit: 'Submit',
+        swap_version: 'Version',
     }
 };
 
@@ -418,6 +422,15 @@ let loadingContainers = {};
 let activeStreams = {};   // request_id -> EventSource
 let isComposing = false;
 let appConfig = { use_agent: false, title: 'CowAgent', subtitle: '', providers: {}, api_bases: {} };
+
+// ---- Message swap / retry state ----
+// messageSwaps[slotId] = array of {userText, userBubbleHtml, botBubbleHtml, timestamp}
+// Index 0 = oldest version; last index = newest (current in DOM).
+const messageSwaps = {};
+// swapCurrentIdx[slotId] = currently displayed version index into messageSwaps[slotId]
+const swapCurrentIdx = {};
+let _slotSeq = 0;
+function _newSlotId() { return 'slot-' + Date.now() + '-' + (++_slotSeq); }
 
 const SESSION_ID_KEY = 'cow_session_id';
 
@@ -893,7 +906,8 @@ function sendMessage() {
 
     const timestamp = new Date();
     const attachments = [...pendingAttachments];
-    addUserMessage(text, timestamp, attachments);
+    const slotId = _newSlotId();
+    addUserMessage(text, timestamp, attachments, slotId);
 
     const loadingEl = addLoadingIndicator();
 
@@ -926,19 +940,19 @@ function sendMessage() {
         .then(data => {
             if (data.status === 'success') {
                 if (data.stream) {
-                    startSSE(data.request_id, loadingEl, timestamp, titleInfo);
+                    startSSE(data.request_id, loadingEl, timestamp, titleInfo, slotId);
                 } else {
                     loadingContainers[data.request_id] = loadingEl;
                 }
             } else {
                 loadingEl.remove();
-                addBotMessage(t('error_send'), new Date());
+                addBotMessage(t('error_send'), new Date(), null, null, slotId);
             }
         })
         .catch(err => {
             if (err.name === 'AbortError') {
                 loadingEl.remove();
-                addBotMessage(t('error_timeout'), new Date());
+                addBotMessage(t('error_timeout'), new Date(), null, null, slotId);
                 return;
             }
             if (attempt < MAX_RETRIES) {
@@ -947,14 +961,14 @@ function sendMessage() {
                 return;
             }
             loadingEl.remove();
-            addBotMessage(t('error_send'), new Date());
+            addBotMessage(t('error_send'), new Date(), null, null, slotId);
         });
     }
 
     postWithRetry(0);
 }
 
-function startSSE(requestId, loadingEl, timestamp, titleInfo) {
+function startSSE(requestId, loadingEl, timestamp, titleInfo, slotId) {
     let botEl = null;
     let stepsEl = null;    // .agent-steps  (thinking summaries + tool indicators)
     let contentEl = null;  // .answer-content (final streaming answer)
@@ -974,8 +988,10 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo) {
         if (botEl) return;
         if (loadingEl) { loadingEl.remove(); loadingEl = null; }
         botEl = document.createElement('div');
-        botEl.className = 'flex gap-3 px-4 sm:px-6 py-3';
+        botEl.className = 'flex gap-3 px-4 sm:px-6 py-3 msg-row';
+        botEl.dataset.msgRole = 'assistant';
         botEl.dataset.requestId = requestId;
+        if (slotId) botEl.dataset.slotId = slotId;
         botEl.innerHTML = `
             <img src="assets/logo.jpg" alt="CowAgent" class="w-8 h-8 rounded-lg flex-shrink-0">
             <div class="min-w-0 flex-1 max-w-[85%]">
@@ -989,6 +1005,11 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo) {
                     <button class="copy-msg-btn text-xs text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400 transition-colors cursor-pointer" title="${currentLang === 'zh' ? '复制' : 'Copy'}" style="display:none">
                         <i class="fas fa-copy"></i>
                     </button>
+                    <div class="msg-actions">
+                        <button class="msg-action-btn" title="${t('retry')}" onclick="retryMessage(this.closest('[data-msg-role=assistant]'))">
+                            <i class="fas fa-rotate-right"></i>
+                        </button>
+                    </div>
                 </div>
             </div>
         `;
@@ -1166,7 +1187,7 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo) {
 
                 if (!botEl && finalText) {
                     if (loadingEl) { loadingEl.remove(); loadingEl = null; }
-                    addBotMessage(finalText, new Date((item.timestamp || Date.now() / 1000) * 1000), requestId);
+                    addBotMessage(finalText, new Date((item.timestamp || Date.now() / 1000) * 1000), requestId, null, slotId);
                 } else if (botEl) {
                     contentEl.classList.remove('sse-streaming');
                     if (finalText) contentEl.innerHTML = renderMarkdown(finalText);
@@ -1176,6 +1197,16 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo) {
                     applyHighlighting(botEl);
                 }
                 scrollChatToBottom();
+
+                // Record this as a new swap version and refresh swap nav
+                if (slotId) {
+                    const activeBotEl = botEl ||
+                        messagesDiv.querySelector(`[data-slot-id="${CSS.escape(slotId)}"][data-msg-role="assistant"]`);
+                    if (activeBotEl) {
+                        _recordSwapVersion(slotId);
+                        _refreshSwapNav(slotId, activeBotEl);
+                    }
+                }
 
                 if (titleInfo) {
                     generateSessionTitle(titleInfo.sid, titleInfo.userMsg, '');
@@ -1189,7 +1220,7 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo) {
                 es.close();
                 delete activeStreams[requestId];
                 if (loadingEl) { loadingEl.remove(); loadingEl = null; }
-                addBotMessage(t('error_send'), new Date());
+                addBotMessage(t('error_send'), new Date(), null, null, slotId);
             }
         };
 
@@ -1268,9 +1299,12 @@ function startPolling() {
     poll();
 }
 
-function createUserMessageEl(content, timestamp, attachments) {
+function createUserMessageEl(content, timestamp, attachments, slotId) {
     const el = document.createElement('div');
-    el.className = 'flex justify-end px-4 sm:px-6 py-3';
+    el.className = 'flex justify-end px-4 sm:px-6 py-3 msg-row';
+    el.dataset.msgRole = 'user';
+    if (slotId) el.dataset.slotId = slotId;
+    el.dataset.msgText = content || '';
 
     let attachHtml = '';
     if (attachments && attachments.length > 0) {
@@ -1286,11 +1320,18 @@ function createUserMessageEl(content, timestamp, attachments) {
 
     const textHtml = content ? renderMarkdown(content) : '';
     el.innerHTML = `
-        <div class="max-w-[75%] sm:max-w-[60%]">
-            <div class="bg-primary-400 text-white rounded-2xl px-4 py-2.5 text-sm leading-relaxed msg-content user-bubble">
-                ${attachHtml}${textHtml}
+        <div class="flex flex-col items-end gap-1">
+            <div class="msg-actions">
+                <button class="msg-action-btn" title="${t('edit_message')}" onclick="startEditMessage(this.closest('[data-msg-role=user]'))">
+                    <i class="fas fa-pencil"></i>
+                </button>
             </div>
-            <div class="text-xs text-slate-400 dark:text-slate-500 mt-1.5 text-right">${formatTime(timestamp)}</div>
+            <div class="max-w-[75%] sm:max-w-[60%]">
+                <div class="bg-primary-400 text-white rounded-2xl px-4 py-2.5 text-sm leading-relaxed msg-content user-bubble">
+                    ${attachHtml}${textHtml}
+                </div>
+                <div class="text-xs text-slate-400 dark:text-slate-500 mt-1.5 text-right">${formatTime(timestamp)}</div>
+            </div>
         </div>
     `;
     return el;
@@ -1393,10 +1434,12 @@ function renderStepsHtml(steps) {
     return { stepsHtml: html, lastContentText };
 }
 
-function createBotMessageEl(content, timestamp, requestId, msg) {
+function createBotMessageEl(content, timestamp, requestId, msg, slotId) {
     const el = document.createElement('div');
-    el.className = 'flex gap-3 px-4 sm:px-6 py-3';
+    el.className = 'flex gap-3 px-4 sm:px-6 py-3 msg-row';
+    el.dataset.msgRole = 'assistant';
     if (requestId) el.dataset.requestId = requestId;
+    if (slotId) el.dataset.slotId = slotId;
 
     let stepsHtml = '';
     let displayContent = content;
@@ -1426,6 +1469,11 @@ function createBotMessageEl(content, timestamp, requestId, msg) {
                 <button class="copy-msg-btn text-xs text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400 transition-colors cursor-pointer" title="${currentLang === 'zh' ? '复制' : 'Copy'}">
                     <i class="fas fa-copy"></i>
                 </button>
+                <div class="msg-actions">
+                    <button class="msg-action-btn" title="${t('retry')}" onclick="retryMessage(this.closest('[data-msg-role=assistant]'))">
+                        <i class="fas fa-rotate-right"></i>
+                    </button>
+                </div>
             </div>
         </div>
     `;
@@ -1435,16 +1483,303 @@ function createBotMessageEl(content, timestamp, requestId, msg) {
     return el;
 }
 
-function addUserMessage(content, timestamp, attachments) {
-    const el = createUserMessageEl(content, timestamp, attachments);
+function addUserMessage(content, timestamp, attachments, slotId) {
+    const el = createUserMessageEl(content, timestamp, attachments, slotId);
     messagesDiv.appendChild(el);
     scrollChatToBottom();
 }
 
-function addBotMessage(content, timestamp, requestId) {
-    const el = createBotMessageEl(content, timestamp, requestId);
+function addBotMessage(content, timestamp, requestId, msg, slotId) {
+    const el = createBotMessageEl(content, timestamp, requestId, msg, slotId);
     messagesDiv.appendChild(el);
     scrollChatToBottom();
+}
+
+// =====================================================================
+// Message Management: Retry, Edit, Swap Navigation
+// =====================================================================
+
+/** Count how many user messages in the DOM are AFTER (below) userEl. */
+function _turnsFromEnd(userEl) {
+    const allUserEls = [...messagesDiv.querySelectorAll('[data-msg-role="user"]')];
+    const idx = allUserEls.indexOf(userEl);
+    if (idx === -1) return 0;
+    return allUserEls.length - 1 - idx;
+}
+
+/** Find the bot message element that immediately follows a user element. */
+function _findFollowingBotEl(userEl) {
+    let el = userEl.nextElementSibling;
+    while (el) {
+        if (el.dataset && el.dataset.msgRole === 'assistant') return el;
+        if (el.dataset && el.dataset.msgRole === 'user') return null;
+        el = el.nextElementSibling;
+    }
+    return null;
+}
+
+/** Find the user message element that immediately precedes a bot element. */
+function _findPrecedingUserEl(botEl) {
+    let el = botEl.previousElementSibling;
+    while (el) {
+        if (el.dataset && el.dataset.msgRole === 'user') return el;
+        if (el.dataset && el.dataset.msgRole === 'assistant') return null;
+        el = el.previousElementSibling;
+    }
+    return null;
+}
+
+/** Remove el and every sibling element that follows it in messagesDiv. */
+function _removeFromElement(el) {
+    while (el) {
+        const next = el.nextElementSibling;
+        el.remove();
+        el = next;
+    }
+}
+
+/**
+ * Snapshot the CURRENT DOM state of a slot and append it as a new swap version.
+ * Called after every new bot response arrives (first time or after retry/edit).
+ */
+function _recordSwapVersion(slotId) {
+    const userEl = messagesDiv.querySelector(`[data-slot-id="${CSS.escape(slotId)}"][data-msg-role="user"]`);
+    const botEl  = messagesDiv.querySelector(`[data-slot-id="${CSS.escape(slotId)}"][data-msg-role="assistant"]`);
+    if (!messageSwaps[slotId]) messageSwaps[slotId] = [];
+    messageSwaps[slotId].push({
+        userText:       userEl ? (userEl.dataset.msgText || '') : '',
+        userBubbleHtml: userEl ? (userEl.querySelector('.user-bubble')?.innerHTML || '') : '',
+        botBubbleHtml:  botEl  ? (botEl.querySelector('.msg-content')?.innerHTML  || '') : '',
+    });
+    swapCurrentIdx[slotId] = messageSwaps[slotId].length - 1;
+}
+
+/** Insert or refresh the swap navigation bar below botEl for the given slot. */
+function _refreshSwapNav(slotId, botEl) {
+    // Remove any existing nav for this slot
+    const old = messagesDiv.querySelector(`.swap-nav[data-slot-id="${CSS.escape(slotId)}"]`);
+    if (old) old.remove();
+
+    const versions = messageSwaps[slotId];
+    if (!versions || versions.length <= 1) return;  // nothing to navigate
+
+    const total   = versions.length;
+    const current = (swapCurrentIdx[slotId] ?? total - 1) + 1;  // 1-indexed display
+
+    const nav = document.createElement('div');
+    nav.className = 'swap-nav';
+    nav.dataset.slotId = slotId;
+    nav.innerHTML = `
+        <div class="swap-nav-inner">
+            <button class="swap-nav-btn" title="${t('swap_version')}" onclick="swapNavigate('${escapeHtml(slotId)}', -1)"
+                ${current <= 1 ? 'disabled' : ''}>
+                <i class="fas fa-chevron-left"></i>
+            </button>
+            <span class="swap-nav-count">${current} / ${total}</span>
+            <button class="swap-nav-btn" title="${t('swap_version')}" onclick="swapNavigate('${escapeHtml(slotId)}', 1)"
+                ${current >= total ? 'disabled' : ''}>
+                <i class="fas fa-chevron-right"></i>
+            </button>
+        </div>
+    `;
+    botEl.insertAdjacentElement('afterend', nav);
+}
+
+/** Navigate the swap buffer by delta (-1 = older, +1 = newer). */
+function swapNavigate(slotId, delta) {
+    const versions = messageSwaps[slotId];
+    if (!versions || versions.length <= 1) return;
+
+    const total = versions.length;
+    const current = swapCurrentIdx[slotId] ?? total - 1;
+    const next = Math.max(0, Math.min(total - 1, current + delta));
+    if (next === current) return;
+
+    swapCurrentIdx[slotId] = next;
+    const ver = versions[next];
+
+    // Update user bubble if content changed
+    const userEl = messagesDiv.querySelector(`[data-slot-id="${CSS.escape(slotId)}"][data-msg-role="user"]`);
+    if (userEl && ver.userBubbleHtml !== undefined) {
+        const bubble = userEl.querySelector('.user-bubble');
+        if (bubble) bubble.innerHTML = ver.userBubbleHtml;
+        userEl.dataset.msgText = ver.userText || '';
+    }
+
+    // Update bot bubble
+    const botEl = messagesDiv.querySelector(`[data-slot-id="${CSS.escape(slotId)}"][data-msg-role="assistant"]`);
+    if (botEl && ver.botBubbleHtml !== undefined) {
+        const bubble = botEl.querySelector('.msg-content');
+        if (bubble) {
+            bubble.innerHTML = ver.botBubbleHtml;
+            applyHighlighting(bubble);
+        }
+    }
+
+    // Refresh the nav bar
+    if (botEl) _refreshSwapNav(slotId, botEl);
+}
+
+/**
+ * Retry: keep the user message, regenerate the bot reply.
+ * Called when the user clicks the Retry button on a bot bubble.
+ */
+async function retryMessage(botEl) {
+    if (!botEl) return;
+    const userEl = _findPrecedingUserEl(botEl);
+    if (!userEl) return;
+
+    const slotId      = userEl.dataset.slotId || botEl.dataset.slotId || _newSlotId();
+    const userText    = userEl.dataset.msgText || '';
+    const turnsFromEnd = _turnsFromEnd(userEl);
+
+    // Ensure both elements share the same slotId going forward
+    userEl.dataset.slotId = slotId;
+
+    // Remove existing swap nav for this slot
+    const oldNav = messagesDiv.querySelector(`.swap-nav[data-slot-id="${CSS.escape(slotId)}"]`);
+    if (oldNav) oldNav.remove();
+
+    // Remove the bot element and everything that follows it
+    _removeFromElement(botEl);
+
+    // Call backend rollback to keep user message but truncate replies
+    try {
+        await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/rollback`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ turns_from_end: turnsFromEnd, mode: 'retry' }),
+        });
+    } catch (e) {
+        console.error('[retryMessage] rollback failed', e);
+    }
+
+    // Show loading and re-send the same user message
+    const loadingEl = addLoadingIndicator();
+    const ts = new Date();
+    fetch('/message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId, message: userText, stream: true }),
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success' && data.stream) {
+            startSSE(data.request_id, loadingEl, ts, null, slotId);
+        } else {
+            loadingEl.remove();
+            addBotMessage(t('error_send'), new Date(), null, null, slotId);
+        }
+    })
+    .catch(() => { loadingEl.remove(); });
+}
+
+/**
+ * Edit: show an inline textarea over the user message bubble.
+ */
+function startEditMessage(userEl) {
+    if (!userEl || userEl.dataset.editing === '1') return;
+    const msgText = userEl.dataset.msgText || '';
+    userEl.dataset.editing = '1';
+    userEl.classList.add('editing');
+
+    // Replace the user bubble content with an edit form (preserve outer structure)
+    const bubble = userEl.querySelector('.user-bubble');
+    if (!bubble) return;
+    bubble.dataset.savedHtml = bubble.innerHTML;
+    bubble.innerHTML = `
+        <div class="edit-form-wrap">
+            <textarea class="edit-textarea" rows="3">${escapeHtml(msgText)}</textarea>
+            <div class="edit-form-actions">
+                <button class="edit-cancel-btn" onclick="cancelEdit(this)">${t('confirm_cancel')}</button>
+                <button class="edit-submit-btn" onclick="submitEdit(this)">${t('edit_submit')}</button>
+            </div>
+        </div>
+    `;
+    const ta = bubble.querySelector('.edit-textarea');
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(ta.scrollHeight, 200) + 'px';
+    ta.focus();
+    ta.selectionStart = ta.selectionEnd = ta.value.length;
+    ta.addEventListener('input', function() {
+        this.style.height = 'auto';
+        this.style.height = Math.min(this.scrollHeight, 200) + 'px';
+    });
+    ta.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey) {
+            e.preventDefault();
+            submitEdit(this.closest('.edit-form-wrap').querySelector('.edit-submit-btn'));
+        } else if (e.key === 'Escape') {
+            cancelEdit(this.closest('.edit-form-wrap').querySelector('.edit-cancel-btn'));
+        }
+    });
+}
+
+/** Cancel inline edit and restore the original bubble content. */
+function cancelEdit(btn) {
+    const userEl = btn.closest('[data-msg-role="user"]');
+    if (!userEl) return;
+    const bubble = userEl.querySelector('.user-bubble');
+    if (bubble && bubble.dataset.savedHtml !== undefined) {
+        bubble.innerHTML = bubble.dataset.savedHtml;
+        delete bubble.dataset.savedHtml;
+    }
+    delete userEl.dataset.editing;
+    userEl.classList.remove('editing');
+}
+
+/**
+ * Submit the edited user message: roll back DB, replace user+bot in DOM,
+ * save old version to swap, then re-send with the new text.
+ */
+async function submitEdit(btn) {
+    const userEl = btn.closest('[data-msg-role="user"]');
+    if (!userEl) return;
+    const ta = userEl.querySelector('.edit-textarea');
+    const newText = ta ? ta.value.trim() : '';
+    if (!newText) return;
+
+    const slotId      = userEl.dataset.slotId || _newSlotId();
+    const turnsFromEnd = _turnsFromEnd(userEl);
+
+    // Remove inline edit state
+    delete userEl.dataset.editing;
+    userEl.classList.remove('editing');
+
+    // Remove user element and everything that follows (bot reply, subsequent turns)
+    _removeFromElement(userEl);
+
+    // Call backend rollback to delete from this user message onwards
+    try {
+        await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/rollback`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ turns_from_end: turnsFromEnd, mode: 'edit' }),
+        });
+    } catch (e) {
+        console.error('[submitEdit] rollback failed', e);
+    }
+
+    // Add new user message and send
+    const ts = new Date();
+    addUserMessage(newText, ts, [], slotId);
+    const loadingEl = addLoadingIndicator();
+
+    fetch('/message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId, message: newText, stream: true }),
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success' && data.stream) {
+            startSSE(data.request_id, loadingEl, ts, null, slotId);
+        } else {
+            loadingEl.remove();
+            addBotMessage(t('error_send'), new Date(), null, null, slotId);
+        }
+    })
+    .catch(() => { loadingEl.remove(); });
 }
 
 // Load conversation history from the server (page 1 = most recent messages).
@@ -1476,11 +1811,21 @@ function loadHistory(page) {
 
             const ctxStartSeq = data.context_start_seq || 0;
             let dividerInserted = false;
+            let currentLoadSlot = null;
 
             data.messages.forEach(msg => {
                 const hasContent = msg.content && msg.content.trim();
                 const hasToolCalls = msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0;
                 if (!hasContent && !hasToolCalls) return;
+
+                // Assign slot IDs: each user turn starts a new slot; the following
+                // assistant turn shares the same slot ID.
+                if (msg.role === 'user') {
+                    currentLoadSlot = _newSlotId();
+                } else if (!currentLoadSlot) {
+                    currentLoadSlot = _newSlotId();  // orphaned assistant msg
+                }
+                const msgSlotId = currentLoadSlot;
 
                 // Insert context divider when transitioning from above to below boundary
                 if (ctxStartSeq > 0 && !dividerInserted && msg._seq !== undefined && msg._seq >= ctxStartSeq) {
@@ -1493,8 +1838,8 @@ function loadHistory(page) {
 
                 const ts = new Date(msg.created_at * 1000);
                 const el = msg.role === 'user'
-                    ? createUserMessageEl(msg.content, ts)
-                    : createBotMessageEl(msg.content || '', ts, null, msg);
+                    ? createUserMessageEl(msg.content, ts, null, msgSlotId)
+                    : createBotMessageEl(msg.content || '', ts, null, msg, msgSlotId);
                 fragment.appendChild(el);
             });
 
@@ -1568,6 +1913,9 @@ function newChat() {
     sessionId = generateSessionId();
     localStorage.setItem(SESSION_ID_KEY, sessionId);
     loadingContainers = {};
+    // Clear swap state for the previous session
+    Object.keys(messageSwaps).forEach(k => delete messageSwaps[k]);
+    Object.keys(swapCurrentIdx).forEach(k => delete swapCurrentIdx[k]);
     startPolling();  // bump generation so old loop self-cancels, new loop uses fresh sessionId
     messagesDiv.innerHTML = '';
     const ws = document.createElement('div');
@@ -1918,6 +2266,10 @@ function switchSession(newSessionId) {
     historyPage = 0;
     historyHasMore = false;
     historyLoading = false;
+
+    // Clear swap state for the previous session
+    Object.keys(messageSwaps).forEach(k => delete messageSwaps[k]);
+    Object.keys(swapCurrentIdx).forEach(k => delete swapCurrentIdx[k]);
 
     messagesDiv.innerHTML = '';
     loadHistory(1);
