@@ -1,0 +1,282 @@
+"""
+Image generation tool - Generate images from text prompts.
+
+This tool prefers the model profile configured in default_model_image_generation.
+If no dedicated profile is configured, it falls back to the current bot's create_img
+implementation when available.
+"""
+
+import base64
+import os
+import uuid
+from typing import Any, Dict, Optional, Tuple
+
+import requests
+
+from agent.tools.base_tool import BaseTool, ToolResult
+from common.log import logger
+from config import conf
+
+DEFAULT_IMAGE_GENERATION_PROFILE_KEY = "default_model_image_generation"
+DEFAULT_TIMEOUT = 90
+
+
+class ImageGenerate(BaseTool):
+    """Generate images from text prompts"""
+
+    name: str = "image_generate"
+    description: str = (
+        "Generate an image from text prompt (text-to-image). "
+        "Uses the configured image-generation model profile when set."
+    )
+
+    params: dict = {
+        "type": "object",
+        "properties": {
+            "prompt": {
+                "type": "string",
+                "description": "Text prompt describing the image to generate",
+            },
+            "size": {
+                "type": "string",
+                "description": "Optional image size (e.g. 1024x1024, 2K)",
+            },
+            "response_format": {
+                "type": "string",
+                "description": "Optional response format: url or b64_json (default: url)",
+            },
+            "save_local": {
+                "type": "boolean",
+                "description": "Whether to save generated image to local workspace and auto-send (default: true)",
+            },
+        },
+        "required": ["prompt"],
+    }
+
+    def __init__(self, config: Optional[dict] = None):
+        self.config = config or {}
+        self.cwd = self.config.get("cwd", os.getcwd())
+
+    def execute(self, args: Dict[str, Any]) -> ToolResult:
+        prompt = (args.get("prompt") or "").strip()
+        if not prompt:
+            return ToolResult.fail("Error: 'prompt' parameter is required")
+
+        size = (args.get("size") or "").strip()
+        response_format = (args.get("response_format") or "url").strip().lower()
+        if response_format not in ("url", "b64_json"):
+            response_format = "url"
+        save_local = args.get("save_local", True)
+
+        profile, profile_error = self._resolve_preferred_profile()
+        if profile_error:
+            return ToolResult.fail(profile_error)
+
+        try:
+            if profile:
+                result = self._generate_via_profile(
+                    profile=profile,
+                    prompt=prompt,
+                    size=size,
+                    response_format=response_format,
+                )
+            else:
+                result = self._generate_via_bot_fallback(prompt=prompt)
+        except requests.Timeout:
+            return ToolResult.fail(f"Error: Image generation timed out after {DEFAULT_TIMEOUT}s")
+        except requests.ConnectionError:
+            return ToolResult.fail("Error: Failed to connect to image generation API")
+        except Exception as e:
+            logger.error(f"[ImageGenerate] Unexpected error: {e}", exc_info=True)
+            return ToolResult.fail(f"Error: Image generation failed - {str(e)}")
+
+        if not result.get("ok"):
+            return ToolResult.fail(result.get("error") or "Error: Image generation failed")
+
+        image_url = result.get("image_url")
+        image_b64 = result.get("image_b64")
+        model = result.get("model")
+        provider = result.get("provider")
+
+        if save_local:
+            local_path = None
+            if image_url:
+                local_path = self._download_image(image_url)
+            elif image_b64:
+                local_path = self._save_b64_image(image_b64)
+
+            if local_path:
+                file_size = os.path.getsize(local_path)
+                file_name = os.path.basename(local_path)
+                return ToolResult.success({
+                    "type": "file_to_send",
+                    "file_type": "image",
+                    "path": local_path,
+                    "file_name": file_name,
+                    "mime_type": "image/png",
+                    "size": file_size,
+                    "size_formatted": self._format_size(file_size),
+                    "message": "已生成图片，正在发送",
+                    "model": model,
+                    "provider": provider,
+                    "image_url": image_url,
+                })
+
+        return ToolResult.success({
+            "model": model,
+            "provider": provider,
+            "image_url": image_url,
+            "image_b64": image_b64,
+        })
+
+    def _resolve_preferred_profile(self) -> Tuple[Optional[dict], Optional[str]]:
+        profile_id = (conf().get(DEFAULT_IMAGE_GENERATION_PROFILE_KEY, "") or "").strip()
+        if not profile_id:
+            return None, None
+
+        custom_models = conf().get("custom_models", []) or []
+        if not isinstance(custom_models, list):
+            custom_models = []
+        profile = next((m for m in custom_models if m.get("id") == profile_id), None)
+        if not profile:
+            return None, (
+                f"Error: '{DEFAULT_IMAGE_GENERATION_PROFILE_KEY}' is set to '{profile_id}', "
+                "but this model profile does not exist."
+            )
+
+        model_id = (profile.get("model") or "").strip()
+        api_key = (profile.get("api_key") or "").strip()
+        api_base = (profile.get("api_base") or "").strip().rstrip("/")
+        profile_name = profile.get("name") or profile_id
+
+        if not model_id:
+            return None, f"Error: Image generation profile '{profile_name}' is missing model field"
+        if not api_key:
+            return None, f"Error: Image generation profile '{profile_name}' is missing api_key field"
+        if not api_base:
+            return None, f"Error: Image generation profile '{profile_name}' is missing api_base field"
+
+        return {
+            "id": profile_id,
+            "name": profile_name,
+            "model": model_id,
+            "api_key": api_key,
+            "api_base": api_base,
+        }, None
+
+    def _generate_via_profile(self, profile: dict, prompt: str, size: str, response_format: str) -> dict:
+        payload = {
+            "model": profile["model"],
+            "prompt": prompt,
+            "response_format": response_format,
+        }
+        if size:
+            payload["size"] = size
+
+        headers = {
+            "Authorization": f"Bearer {profile['api_key']}",
+            "Content-Type": "application/json",
+        }
+
+        resp = requests.post(
+            f"{profile['api_base']}/images/generations",
+            headers=headers,
+            json=payload,
+            timeout=DEFAULT_TIMEOUT,
+        )
+
+        if resp.status_code != 200:
+            return {
+                "ok": False,
+                "error": f"HTTP {resp.status_code}: {resp.text[:300]}",
+            }
+
+        data = resp.json()
+        items = data.get("data") or []
+        if not items:
+            return {"ok": False, "error": "Image API returned empty data"}
+
+        first = items[0] if isinstance(items[0], dict) else {}
+        image_url = first.get("url")
+        image_b64 = first.get("b64_json")
+        if not image_url and not image_b64:
+            return {"ok": False, "error": "Image API returned neither url nor b64_json"}
+
+        return {
+            "ok": True,
+            "model": profile["model"],
+            "provider": f"profile:{profile['name']}",
+            "image_url": image_url,
+            "image_b64": image_b64,
+        }
+
+    def _generate_via_bot_fallback(self, prompt: str) -> dict:
+        bot = getattr(getattr(self, "model", None), "bot", None)
+        if not bot or not hasattr(bot, "create_img"):
+            return {
+                "ok": False,
+                "error": (
+                    "No image generation profile configured and current model bot "
+                    "does not support create_img."
+                ),
+            }
+
+        ok, output = bot.create_img(prompt)
+        if not ok:
+            return {"ok": False, "error": str(output)}
+
+        return {
+            "ok": True,
+            "model": conf().get("text_to_image", ""),
+            "provider": "bot_fallback",
+            "image_url": output,
+            "image_b64": None,
+        }
+
+    def _download_image(self, url: str) -> Optional[str]:
+        try:
+            resp = requests.get(url, timeout=DEFAULT_TIMEOUT)
+            resp.raise_for_status()
+        except Exception as e:
+            logger.warning(f"[ImageGenerate] Failed to download image URL: {e}")
+            return None
+
+        content_type = (resp.headers.get("Content-Type") or "image/png").split(";")[0].strip().lower()
+        ext_map = {
+            "image/jpeg": ".jpg",
+            "image/png": ".png",
+            "image/webp": ".webp",
+            "image/gif": ".gif",
+            "image/bmp": ".bmp",
+        }
+        ext = ext_map.get(content_type, ".png")
+
+        out_dir = os.path.join(self.cwd, "tmp", "generated")
+        os.makedirs(out_dir, exist_ok=True)
+        file_path = os.path.join(out_dir, f"image-{uuid.uuid4().hex}{ext}")
+        with open(file_path, "wb") as f:
+            f.write(resp.content)
+        return file_path
+
+    def _save_b64_image(self, image_b64: str) -> Optional[str]:
+        try:
+            raw = base64.b64decode(image_b64)
+        except Exception as e:
+            logger.warning(f"[ImageGenerate] Invalid b64 image: {e}")
+            return None
+
+        out_dir = os.path.join(self.cwd, "tmp", "generated")
+        os.makedirs(out_dir, exist_ok=True)
+        file_path = os.path.join(out_dir, f"image-{uuid.uuid4().hex}.png")
+        with open(file_path, "wb") as f:
+            f.write(raw)
+        return file_path
+
+    @staticmethod
+    def _format_size(size_bytes: int) -> str:
+        size = float(size_bytes)
+        for unit in ["B", "KB", "MB", "GB"]:
+            if size < 1024.0:
+                return f"{size:.1f}{unit}"
+            size /= 1024.0
+        return f"{size:.1f}TB"

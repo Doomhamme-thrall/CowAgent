@@ -206,6 +206,11 @@ available_setting = {
     "agent_max_steps": 20,  # Agent模式下单次运行最大决策步数
     "enable_thinking": False,  # Whether to enable deep thinking for web channel
     "knowledge": True,  # 是否开启知识库功能
+    "default_model_web": "",  # Web 对话默认模型（custom_models 的 profile id）
+    "default_model_task": "",  # 定时任务默认模型（custom_models 的 profile id）
+    "default_model_qq": "",  # QQ 默认模型（custom_models 的 profile id）
+    "default_model_vision": "",  # 图像识别默认模型（custom_models 的 profile id）
+    "default_model_image_generation": "",  # 图像生成默认模型（custom_models 的 profile id）
 }
 
 

@@ -112,6 +112,12 @@ class OpenAICompatibleBot:
             # Allow per-request overrides for custom model profiles
             api_key = kwargs.get('api_key_override') or api_config.get('api_key')
             api_base = kwargs.get('api_base_override') or api_config.get('api_base')
+            api_base = self._normalize_api_base(api_base)
+
+            logger.info(
+                f"[{self.__class__.__name__}] call_with_tools model={request_params.get('model')} "
+                f"api_base={api_base or 'default'} stream={stream} tools={bool(tools)}"
+            )
             
             if stream:
                 return self._handle_stream_response(request_params, api_key, api_base)
@@ -145,8 +151,22 @@ class OpenAICompatibleBot:
                 kwargs["api_key"] = api_key
             if api_base:
                 kwargs["api_base"] = api_base
-            
-            response = openai.ChatCompletion.create(**kwargs)
+
+            try:
+                response = openai.ChatCompletion.create(**kwargs)
+            except Exception as first_err:
+                # Some OpenAI-compatible providers don't support function/tool calling.
+                # Retry once without tools to preserve compatibility.
+                if "tools" in kwargs or "tool_choice" in kwargs:
+                    logger.warning(
+                        f"[{self.__class__.__name__}] tool-call request failed, retrying without tools: {first_err}"
+                    )
+                    retry_kwargs = dict(kwargs)
+                    retry_kwargs.pop("tools", None)
+                    retry_kwargs.pop("tool_choice", None)
+                    response = openai.ChatCompletion.create(**retry_kwargs)
+                else:
+                    raise
             return response
             
         except Exception as e:
@@ -166,8 +186,22 @@ class OpenAICompatibleBot:
                 kwargs["api_key"] = api_key
             if api_base:
                 kwargs["api_base"] = api_base
-            
-            stream = openai.ChatCompletion.create(**kwargs)
+
+            try:
+                stream = openai.ChatCompletion.create(**kwargs)
+            except Exception as first_err:
+                # Some OpenAI-compatible providers don't support function/tool calling.
+                # Retry once without tools to preserve compatibility.
+                if "tools" in kwargs or "tool_choice" in kwargs:
+                    logger.warning(
+                        f"[{self.__class__.__name__}] stream tool-call request failed, retrying without tools: {first_err}"
+                    )
+                    retry_kwargs = dict(kwargs)
+                    retry_kwargs.pop("tools", None)
+                    retry_kwargs.pop("tool_choice", None)
+                    stream = openai.ChatCompletion.create(**retry_kwargs)
+                else:
+                    raise
             
             # Stream chunks to caller
             for chunk in stream:
@@ -180,6 +214,25 @@ class OpenAICompatibleBot:
                 "message": str(e),
                 "status_code": 500
             }
+
+    def _normalize_api_base(self, api_base):
+        """Normalize user-provided API base to OpenAI-style base URL.
+
+        Accepts either a base URL (..../v1) or a full chat endpoint
+        (..../v1/chat/completions). Returns normalized base URL.
+        """
+        if not api_base:
+            return api_base
+
+        base = str(api_base).strip()
+        if not base:
+            return ""
+
+        base = base.rstrip("/")
+        if base.endswith("/chat/completions"):
+            base = base[: -len("/chat/completions")]
+
+        return base
     
     def _convert_tools_to_openai_format(self, tools):
         """

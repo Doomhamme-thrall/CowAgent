@@ -35,5 +35,7 @@
   "custom_models": [],
   "default_model_web": "",
   "default_model_task": "",
-  "default_model_qq": ""
+  "default_model_qq": "",
+  "default_model_vision": "",
+  "default_model_image_generation": ""
 }

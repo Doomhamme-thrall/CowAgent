@@ -73,6 +73,15 @@ def _import_optional_tools():
     except Exception as e:
         logger.error(f"[Tools] Vision failed to load: {e}")
 
+    # ImageGenerate Tool
+    try:
+        from agent.tools.image_generate.image_generate import ImageGenerate
+        tools['ImageGenerate'] = ImageGenerate
+    except ImportError as e:
+        logger.error(f"[Tools] ImageGenerate not loaded - missing dependency: {e}")
+    except Exception as e:
+        logger.error(f"[Tools] ImageGenerate failed to load: {e}")
+
     return tools
 
 # Load optional tools
@@ -82,6 +91,7 @@ SchedulerTool = _optional_tools.get('SchedulerTool')
 WebSearch = _optional_tools.get('WebSearch')
 WebFetch = _optional_tools.get('WebFetch')
 Vision = _optional_tools.get('Vision')
+ImageGenerate = _optional_tools.get('ImageGenerate')
 GoogleSearch = _optional_tools.get('GoogleSearch')
 FileSave = _optional_tools.get('FileSave')
 Terminal = _optional_tools.get('Terminal')
@@ -124,6 +134,7 @@ __all__ = [
     'WebSearch',
     'WebFetch',
     'Vision',
+    'ImageGenerate',
     'BrowserTool',
 ]
 
