@@ -98,6 +98,28 @@ class Role(Plugin):
     def on_handle_context(self, e_context: EventContext):
         if e_context["context"].type != ContextType.TEXT:
             return
+
+        # Legacy role commands are deprecated in multi-agent mode.
+        # Persona is now managed by agent-level workspace files.
+        trigger_prefix = conf().get("plugin_trigger_prefix", "$")
+        content = (e_context["context"].content or "").strip()
+        command = content.split(maxsplit=1)[0] if content else ""
+        deprecated_cmds = {
+            f"{trigger_prefix}角色",
+            f"{trigger_prefix}role",
+            f"{trigger_prefix}设定扮演",
+            f"{trigger_prefix}停止扮演",
+            f"{trigger_prefix}角色类型",
+        }
+        if command in deprecated_cmds:
+            reply = Reply(
+                ReplyType.INFO,
+                "旧版角色扮演命令已下线。请改为使用多Agent配置（agents/default_agent_id）与各agent工作空间中的AGENT.md/SOUL.md定义persona。",
+            )
+            e_context["reply"] = reply
+            e_context.action = EventAction.BREAK_PASS
+        return
+
         btype = Bridge().get_bot_type("chat")
         if btype not in [const.OPEN_AI, const.OPENAI, const.CHATGPT, const.CHATGPTONAZURE, const.QWEN_DASHSCOPE, const.XUNFEI, const.BAIDU, const.ZHIPU_AI, const.MOONSHOT, const.MiniMax, const.LINKAI, const.MODELSCOPE]:
             logger.debug(f'不支持的bot: {btype}')

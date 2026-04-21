@@ -93,6 +93,18 @@ class ChatChannel(Channel):
             else:
                 context["session_id"] = cmsg.other_user_id
                 context["receiver"] = cmsg.other_user_id
+
+            # Resolve agent routing and compose isolated session key.
+            # Keep origin_session_id for compatibility, and use session_id as
+            # the isolated key so existing queue/cache logic becomes agent-aware.
+            origin_session_id = str(context.get("session_id", ""))
+            agent_id = self._resolve_agent_id(context)
+            session_key = f"{agent_id}:{origin_session_id}" if origin_session_id else agent_id
+            context["origin_session_id"] = origin_session_id
+            context["agent_id"] = agent_id
+            context["session_key"] = session_key
+            context["session_id"] = session_key
+
             e_context = PluginManager().emit_event(EventContext(Event.ON_RECEIVE_MESSAGE, {"channel": self, "context": context}))
             context = e_context["context"]
             if e_context.is_pass() or context is None:
@@ -174,6 +186,40 @@ class ChatChannel(Channel):
             if "desire_rtype" not in context and conf().get("voice_reply_voice") and ReplyType.VOICE not in self.NOT_SUPPORT_REPLYTYPE:
                 context["desire_rtype"] = ReplyType.VOICE
         return context
+
+    def _resolve_agent_id(self, context: Context) -> str:
+        """Resolve agent id from optional routing rules, fallback to default_agent_id."""
+        default_agent_id = str(conf().get("default_agent_id", "main") or "main").strip() or "main"
+
+        # Optional explicit override from upper layers.
+        explicit = context.get("agent_id")
+        if explicit:
+            explicit = str(explicit).strip()
+            if explicit:
+                return explicit
+
+        rules = conf().get("agent_route_rules", []) or []
+        channel_type = str(context.get("channel_type", "") or "").strip()
+        isgroup = bool(context.get("isgroup", False))
+
+        if isinstance(rules, list):
+            for rule in rules:
+                if not isinstance(rule, dict):
+                    continue
+                rule_agent = str(rule.get("agent_id", "") or "").strip()
+                if not rule_agent:
+                    continue
+
+                rule_channel = rule.get("channel_type")
+                if rule_channel and str(rule_channel).strip() != channel_type:
+                    continue
+
+                if "isgroup" in rule and bool(rule.get("isgroup")) != isgroup:
+                    continue
+
+                return rule_agent
+
+        return default_agent_id
 
     def _handle(self, context: Context):
         if context is None or not context.content:
