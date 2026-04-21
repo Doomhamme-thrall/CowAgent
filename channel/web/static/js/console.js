@@ -42,6 +42,9 @@ const I18N = {
         config_channel_type: '通道类型',
         config_provider: '模型厂商', config_model_name: '模型',
         config_custom_model_hint: '输入自定义模型名称',
+        config_agent_profile: 'Agent 资料', config_agent_id: 'Agent ID', config_agent_name: '显示名称',
+        config_agent_workspace: '工作空间', config_agent_default_note: '默认 Agent 使用全局设置，其余 Agent 使用独立配置。',
+        config_agent_new: '新增 Agent', config_agent_delete: '删除 Agent',
         config_save: '保存', config_saved: '已保存',
         config_save_error: '保存失败',
         config_custom_option: '自定义...',
@@ -69,6 +72,8 @@ const I18N = {
         channels_empty: '暂未接入任何通道', channels_empty_desc: '点击右上角「接入通道」按钮开始配置',
         channels_disconnect_confirm: '确认断开该通道？配置将保留但通道会停止运行。',
         channels_connected: '已接入', channels_connecting: '接入中...',
+        channels_agent: '绑定 Agent',
+        agent_selector_title: '选择 Agent', agent_selector_default: '默认 Agent', agent_selector_new: '新对话使用此 Agent',
         weixin_scan_title: '微信扫码登录', weixin_scan_desc: '请使用微信扫描下方二维码',
         weixin_scan_loading: '正在获取二维码...', weixin_scan_waiting: '等待扫码...',
         weixin_scan_scanned: '已扫码，请在手机上确认', weixin_scan_expired: '二维码已过期，正在刷新...',
@@ -152,6 +157,9 @@ const I18N = {
         config_channel_type: 'Channel Type',
         config_provider: 'Provider', config_model_name: 'Model',
         config_custom_model_hint: 'Enter custom model name',
+        config_agent_profile: 'Agent Profile', config_agent_id: 'Agent ID', config_agent_name: 'Display Name',
+        config_agent_workspace: 'Workspace', config_agent_default_note: 'The default Agent uses global settings. Other Agents use their own profiles.',
+        config_agent_new: 'New Agent', config_agent_delete: 'Delete Agent',
         config_save: 'Save', config_saved: 'Saved',
         config_save_error: 'Save failed',
         config_custom_option: 'Custom...',
@@ -179,6 +187,8 @@ const I18N = {
         channels_empty: 'No channels connected', channels_empty_desc: 'Click the "Connect" button above to get started',
         channels_disconnect_confirm: 'Disconnect this channel? Config will be preserved but the channel will stop.',
         channels_connected: 'Connected', channels_connecting: 'Connecting...',
+        channels_agent: 'Bind Agent',
+        agent_selector_title: 'Select Agent', agent_selector_default: 'Default Agent', agent_selector_new: 'Use this Agent for new chats',
         weixin_scan_title: 'WeChat QR Login', weixin_scan_desc: 'Scan the QR code below with WeChat',
         weixin_scan_loading: 'Loading QR code...', weixin_scan_waiting: 'Waiting for scan...',
         weixin_scan_scanned: 'Scanned, please confirm on your phone', weixin_scan_expired: 'QR code expired, refreshing...',
@@ -256,6 +266,7 @@ function applyI18n() {
     if (langLabel) langLabel.textContent = currentLang === 'zh' ? '中文' : 'EN';
     // Update model selector label (uses i18n key for global label)
     if (typeof updateModelSelectorLabel === 'function') updateModelSelectorLabel();
+    if (typeof _updateAgentSelectorLabel === 'function') _updateAgentSelectorLabel();
 }
 
 function toggleLanguage() {
@@ -506,6 +517,93 @@ let loadingContainers = {};
 let activeStreams = {};   // request_id -> EventSource
 let isComposing = false;
 let appConfig = { use_agent: false, title: 'CowAgent', subtitle: '', providers: {}, api_bases: {} };
+let availableAgents = [];
+let selectedAgentId = '';
+
+function _normalizeAgentId(agentId) {
+    const value = String(agentId || '').trim();
+    return value || 'main';
+}
+
+function _buildAgentOptions(data) {
+    const options = [];
+    const defaultAgent = data && data.default_agent ? data.default_agent : null;
+    const defaultAgentId = _normalizeAgentId((data && data.default_agent_id) || (defaultAgent && defaultAgent.id) || 'main');
+
+    if (defaultAgent) {
+        options.push({
+            value: defaultAgent.id || defaultAgentId,
+            label: defaultAgent.name || t('agent_selector_default'),
+            data: defaultAgent,
+        });
+    } else {
+        options.push({
+            value: defaultAgentId,
+            label: t('agent_selector_default'),
+            data: { id: defaultAgentId, name: t('agent_selector_default') },
+        });
+    }
+
+    (data && data.agents ? data.agents : []).forEach(agent => {
+        if (!agent || !agent.id) return;
+        if (agent.id === defaultAgentId) return;
+        options.push({
+            value: agent.id,
+            label: agent.name || agent.id,
+            data: agent,
+        });
+    });
+
+    return options;
+}
+
+function _getDefaultAgentId() {
+    return _normalizeAgentId(appConfig.default_agent_id || (appConfig.default_agent && appConfig.default_agent.id) || 'main');
+}
+
+function _parseAgentIdFromSessionId(sid) {
+    const value = String(sid || '').trim();
+    if (value.includes(':')) {
+        const prefix = value.split(':', 1)[0].trim();
+        if (prefix) return prefix;
+    }
+    return '';
+}
+
+function _updateAgentSelectorLabel() {
+    const label = document.getElementById('agent-selector-label');
+    if (!label) return;
+    const agent = availableAgents.find(item => item.value === selectedAgentId);
+    label.textContent = agent ? agent.label : t('agent_selector_default');
+}
+
+function initAgentSelector(data) {
+    availableAgents = _buildAgentOptions(data || appConfig);
+    const options = availableAgents.map(item => ({ value: item.value, label: item.label }));
+    const selector = document.getElementById('agent-selector');
+    if (!selector || options.length === 0) return;
+
+    if (!selectedAgentId) {
+        selectedAgentId = _parseAgentIdFromSessionId(sessionId) || _getDefaultAgentId();
+    }
+    const current = availableAgents.find(item => item.value === selectedAgentId) ? selectedAgentId : options[0].value;
+    selectedAgentId = current;
+    initDropdown(selector, options, current, onAgentSelectChange);
+    _updateAgentSelectorLabel();
+}
+
+function onAgentSelectChange(agentId) {
+    selectedAgentId = _normalizeAgentId(agentId || _getDefaultAgentId());
+    _updateAgentSelectorLabel();
+}
+
+function _ensureSelectedAgentFromSession(sessionValue) {
+    const parsed = _parseAgentIdFromSessionId(sessionValue);
+    if (parsed) {
+        selectedAgentId = parsed;
+        _updateAgentSelectorLabel();
+    }
+}
 
 // =====================================================================
 // Model Selector State
@@ -658,6 +756,8 @@ fetch('/config').then(r => r.json()).then(data => {
         const title = data.title || 'CowAgent';
         document.getElementById('welcome-title').textContent = title;
         initConfigView(data);
+        initAgentSelector(data);
+        _ensureSelectedAgentFromSession(sessionId);
     }
     loadHistory(1);
 }).catch(() => { loadHistory(1); });
@@ -1113,7 +1213,7 @@ function sendMessage() {
     renderAttachmentPreview();
     sendBtn.disabled = true;
 
-    const body = { session_id: sessionId, message: text, stream: true, timestamp: timestamp.toISOString() };
+    const body = { session_id: sessionId, message: text, stream: true, timestamp: timestamp.toISOString(), agent_id: selectedAgentId || _getDefaultAgentId() };
     if (attachments.length > 0) {
         body.attachments = attachments.map(a => ({
             file_path: a.file_path,
@@ -1138,6 +1238,12 @@ function sendMessage() {
         .then(r => r.json())
         .then(data => {
             if (data.status === 'success') {
+                if (data.session_id) {
+                    sessionId = data.session_id;
+                    localStorage.setItem(SESSION_ID_KEY, sessionId);
+                    if (titleInfo) titleInfo.sid = data.session_id;
+                    _ensureSelectedAgentFromSession(sessionId);
+                }
                 if (data.stream) {
                     startSSE(data.request_id, loadingEl, timestamp, titleInfo, slotId);
                 } else {
@@ -1856,7 +1962,7 @@ async function retryMessage(botEl) {
     // Show loading and re-send the same user message
     const loadingEl = addLoadingIndicator();
     const ts = new Date();
-    const retryBody = { session_id: sessionId, message: userText, stream: true };
+    const retryBody = { session_id: sessionId, message: userText, stream: true, agent_id: selectedAgentId || _getDefaultAgentId() };
     const override = getModelOverride();
     if (override) retryBody.model_override = override;
     fetch('/message', {
@@ -1970,7 +2076,7 @@ async function submitEdit(btn) {
     fetch('/message', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId, message: newText, stream: true }),
+        body: JSON.stringify({ session_id: sessionId, message: newText, stream: true, agent_id: selectedAgentId || _getDefaultAgentId() }),
     })
     .then(r => r.json())
     .then(data => {
@@ -2112,7 +2218,8 @@ function newChat() {
     activeStreams = {};
 
     // Generate a fresh session and persist it so the next page load also starts clean
-    sessionId = generateSessionId();
+    selectedAgentId = _normalizeAgentId(selectedAgentId || _getDefaultAgentId());
+    sessionId = `${selectedAgentId}:${generateSessionId()}`;
     localStorage.setItem(SESSION_ID_KEY, sessionId);
     loadingContainers = {};
     // Clear swap state for the previous session
@@ -2121,6 +2228,7 @@ function newChat() {
 
     // Apply default model for new web chats if configured
     _applyDefaultWebModel();
+    _updateAgentSelectorLabel();
 
     startPolling();  // bump generation so old loop self-cancels, new loop uses fresh sessionId
     messagesDiv.innerHTML = '';
@@ -2417,9 +2525,15 @@ function _fetchSessionPage(page, clear, onDone) {
                 item.dataset.sessionId = s.session_id;
 
                 const title = s.title || t('untitled_session');
+                const agentId = s.agent_id || _parseAgentIdFromSessionId(s.session_id) || _getDefaultAgentId();
                 item.innerHTML = `
                     <i class="fas fa-message session-icon"></i>
-                    <span class="session-title" title="${escapeHtml(title)}">${escapeHtml(title)}</span>
+                    <div class="flex-1 min-w-0">
+                        <span class="session-title block truncate" title="${escapeHtml(title)}">${escapeHtml(title)}</span>
+                        <span class="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5 inline-flex items-center gap-1">
+                            <i class="fas fa-user-gear"></i>${escapeHtml(agentId)}
+                        </span>
+                    </div>
                     <button class="session-delete" onclick="event.stopPropagation(); deleteSession('${s.session_id}')" title="Delete">
                         <i class="fas fa-trash-can"></i>
                     </button>
@@ -2468,6 +2582,7 @@ function switchSession(newSessionId) {
 
     sessionId = newSessionId;
     localStorage.setItem(SESSION_ID_KEY, sessionId);
+    _ensureSelectedAgentFromSession(sessionId);
 
     historyPage = 0;
     historyHasMore = false;
@@ -2631,6 +2746,8 @@ let configApiKeys = {};
 let configCurrentModel = '';
 let cfgProviderValue = '';
 let cfgModelValue = '';
+let configAgentProfiles = [];
+let configSelectedAgentId = '__default__';
 
 // --- Custom dropdown helper ---
 function initDropdown(el, options, selectedValue, onChange) {
@@ -2682,6 +2799,156 @@ document.addEventListener('click', () => {
 
 function getDropdownValue(el) { return el._ddValue || ''; }
 
+function _getConfigDefaultAgent() {
+    const fallbackId = _getDefaultAgentId();
+    return configAgentProfiles.find(agent => agent.is_default) || {
+        id: fallbackId,
+        name: t('agent_selector_default'),
+        workspace: appConfig.agent_workspace || '~/cow',
+        max_context_tokens: appConfig.agent_max_context_tokens || 50000,
+        max_context_turns: appConfig.agent_max_context_turns || 20,
+        max_steps: appConfig.agent_max_steps || 20,
+        is_default: true,
+    };
+}
+
+function _getConfigAgentOptions(data) {
+    const options = [];
+    const defaultAgent = (data && data.default_agent) || _getConfigDefaultAgent();
+    options.push({ value: '__default__', label: defaultAgent.name || t('agent_selector_default') });
+    (data && data.agents ? data.agents : []).forEach(agent => {
+        if (!agent || !agent.id) return;
+        options.push({ value: agent.id, label: agent.name || agent.id });
+    });
+    options.push({ value: '__new__', label: t('config_agent_new') });
+    return options;
+}
+
+function _findConfigAgent(agentId) {
+    if (!agentId || agentId === '__default__') return _getConfigDefaultAgent();
+    return configAgentProfiles.find(agent => agent.id === agentId) || null;
+}
+
+function _renderConfigAgentForm(agent) {
+    const defaultAgent = _getConfigDefaultAgent();
+    const isNew = configSelectedAgentId === '__new__';
+    const isDefault = !isNew && (!agent || agent.is_default || configSelectedAgentId === '__default__');
+    const current = agent || (isNew ? {
+        id: '',
+        name: '',
+        workspace: '',
+        max_context_tokens: appConfig.agent_max_context_tokens || 50000,
+        max_context_turns: appConfig.agent_max_context_turns || 20,
+        max_steps: appConfig.agent_max_steps || 20,
+    } : defaultAgent);
+
+    const idInput = document.getElementById('cfg-agent-id');
+    const nameInput = document.getElementById('cfg-agent-name');
+    const workspaceInput = document.getElementById('cfg-agent-workspace');
+    const tokensInput = document.getElementById('cfg-max-tokens');
+    const turnsInput = document.getElementById('cfg-max-turns');
+    const stepsInput = document.getElementById('cfg-max-steps');
+    const thinkInput = document.getElementById('cfg-enable-thinking');
+    const deleteBtn = document.getElementById('cfg-agent-delete');
+
+    if (idInput) {
+        idInput.value = isDefault ? (current.id || _getDefaultAgentId()) : (current.id || '');
+        idInput.disabled = isDefault ? false : !isNew;
+    }
+    if (nameInput) nameInput.value = current.name || current.id || '';
+    if (workspaceInput) workspaceInput.value = current.workspace || '';
+    if (tokensInput) tokensInput.value = current.max_context_tokens || 50000;
+    if (turnsInput) turnsInput.value = current.max_context_turns || 20;
+    if (stepsInput) stepsInput.value = current.max_steps || 20;
+    if (thinkInput) {
+        thinkInput.checked = appConfig.enable_thinking === true;
+        thinkInput.disabled = !isDefault;
+    }
+    if (deleteBtn) deleteBtn.disabled = isDefault || isNew;
+}
+
+function initAgentConfigView(data) {
+    configAgentProfiles = [];
+    const defaultAgent = data.default_agent || {
+        id: data.default_agent_id || _getDefaultAgentId(),
+        name: t('agent_selector_default'),
+        workspace: data.agent_workspace || '~/cow',
+        max_context_tokens: data.agent_max_context_tokens || 50000,
+        max_context_turns: data.agent_max_context_turns || 20,
+        max_steps: data.agent_max_steps || 20,
+        is_default: true,
+    };
+    defaultAgent.is_default = true;
+    configAgentProfiles.push(defaultAgent);
+    (data.agents || []).forEach(agent => {
+        if (!agent || !agent.id || agent.id === defaultAgent.id) return;
+        configAgentProfiles.push({
+            id: agent.id,
+            name: agent.name || agent.id,
+            workspace: agent.workspace || '',
+            max_context_tokens: agent.max_context_tokens || data.agent_max_context_tokens || 50000,
+            max_context_turns: agent.max_context_turns || data.agent_max_context_turns || 20,
+            max_steps: agent.max_steps || data.agent_max_steps || 20,
+            is_default: false,
+        });
+    });
+
+    const selectEl = document.getElementById('cfg-agent-select');
+    const options = _getConfigAgentOptions(data);
+    if (selectEl) {
+        if (!configSelectedAgentId || !options.find(o => o.value === configSelectedAgentId)) {
+            configSelectedAgentId = '__default__';
+        }
+        initDropdown(selectEl, options, configSelectedAgentId, onConfigAgentSelectChange);
+    }
+    _renderConfigAgentForm(_findConfigAgent(configSelectedAgentId));
+}
+
+function onConfigAgentSelectChange(agentId) {
+    configSelectedAgentId = agentId || '__default__';
+    _renderConfigAgentForm(_findConfigAgent(configSelectedAgentId));
+}
+
+function createAgentProfile() {
+    configSelectedAgentId = '__new__';
+    const selectEl = document.getElementById('cfg-agent-select');
+    if (selectEl) {
+        const options = _getConfigAgentOptions(appConfig);
+        initDropdown(selectEl, options, '__new__', onConfigAgentSelectChange);
+    }
+    _renderConfigAgentForm({
+        id: '',
+        name: '',
+        workspace: '',
+        max_context_tokens: appConfig.agent_max_context_tokens || 50000,
+        max_context_turns: appConfig.agent_max_context_turns || 20,
+        max_steps: appConfig.agent_max_steps || 20,
+        is_default: false,
+    });
+}
+
+function deleteAgentProfile() {
+    if (configSelectedAgentId === '__default__' || configSelectedAgentId === '__new__') return;
+    const agent = _findConfigAgent(configSelectedAgentId);
+    if (!agent) return;
+
+    showConfirmDialog({
+        title: t('config_agent_delete'),
+        message: agent.name ? `${agent.name} (${agent.id})` : agent.id,
+        okText: t('confirm_yes'),
+        cancelText: t('confirm_cancel'),
+        onConfirm: () => {
+            fetch('/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ agent_scope: 'agent', agent_id: agent.id, updates: { delete: true } }),
+            }).then(r => r.json()).then(data => {
+                if (data.status === 'success') loadConfigView();
+            }).catch(() => {});
+        },
+    });
+}
+
 // --- Config init ---
 function initConfigView(data) {
     configProviders = data.providers || {};
@@ -2703,10 +2970,7 @@ function initConfigView(data) {
     onProviderChange(cfgProviderValue);
     syncModelSelection(configCurrentModel);
 
-    document.getElementById('cfg-max-tokens').value = data.agent_max_context_tokens || 50000;
-    document.getElementById('cfg-max-turns').value = data.agent_max_context_turns || 20;
-    document.getElementById('cfg-max-steps').value = data.agent_max_steps || 20;
-    document.getElementById('cfg-enable-thinking').checked = data.enable_thinking === true;
+    initAgentConfigView(data);
 
     const pwdInput = document.getElementById('cfg-password');
     const maskedPwd = data.web_password_masked || '';
@@ -2940,24 +3204,55 @@ function saveModelConfig() {
 }
 
 function saveAgentConfig() {
+    const idInput = document.getElementById('cfg-agent-id');
+    const nameInput = document.getElementById('cfg-agent-name');
+    const workspaceInput = document.getElementById('cfg-agent-workspace');
     const updates = {
-        agent_max_context_tokens: parseInt(document.getElementById('cfg-max-tokens').value) || 50000,
-        agent_max_context_turns: parseInt(document.getElementById('cfg-max-turns').value) || 20,
-        agent_max_steps: parseInt(document.getElementById('cfg-max-steps').value) || 20,
-        enable_thinking: document.getElementById('cfg-enable-thinking').checked,
+        id: (idInput && idInput.value.trim()) || '',
+        name: (nameInput && nameInput.value.trim()) || '',
+        workspace: (workspaceInput && workspaceInput.value.trim()) || '',
+        max_context_tokens: parseInt(document.getElementById('cfg-max-tokens').value) || 50000,
+        max_context_turns: parseInt(document.getElementById('cfg-max-turns').value) || 20,
+        max_steps: parseInt(document.getElementById('cfg-max-steps').value) || 20,
     };
+    const enableThinking = document.getElementById('cfg-enable-thinking')?.checked === true;
+    if (configSelectedAgentId === '__default__') {
+        updates.enable_thinking = enableThinking;
+    }
+
+    const payload = configSelectedAgentId === '__default__'
+        ? { agent_scope: 'default', updates: {
+            agent_workspace: updates.workspace,
+            default_agent_id: updates.id || _getDefaultAgentId(),
+            agent_max_context_tokens: updates.max_context_tokens,
+            agent_max_context_turns: updates.max_context_turns,
+            agent_max_steps: updates.max_steps,
+            enable_thinking: enableThinking,
+        } }
+        : { agent_scope: 'agent', agent_id: updates.id || configSelectedAgentId, updates };
+
+    if (configSelectedAgentId !== '__default__' && !(updates.id || configSelectedAgentId)) return;
 
     const btn = document.getElementById('cfg-agent-save');
     btn.disabled = true;
     fetch('/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ updates })
+        body: JSON.stringify(payload)
     })
     .then(r => r.json())
     .then(data => {
         if (data.status === 'success') {
+            if (configSelectedAgentId === '__default__' && data.applied) {
+                appConfig.default_agent_id = data.applied.default_agent_id || appConfig.default_agent_id;
+                appConfig.agent_workspace = data.applied.agent_workspace || appConfig.agent_workspace;
+                appConfig.agent_max_context_tokens = data.applied.agent_max_context_tokens || appConfig.agent_max_context_tokens;
+                appConfig.agent_max_context_turns = data.applied.agent_max_context_turns || appConfig.agent_max_context_turns;
+                appConfig.agent_max_steps = data.applied.agent_max_steps || appConfig.agent_max_steps;
+                appConfig.enable_thinking = data.applied.enable_thinking !== undefined ? data.applied.enable_thinking : appConfig.enable_thinking;
+            }
             showStatus('cfg-agent-status', 'config_saved', false);
+            loadConfigView();
         } else {
             showStatus('cfg-agent-status', 'config_save_error', true);
         }
@@ -3005,6 +3300,7 @@ function loadConfigView() {
         if (data.status !== 'success') return;
         appConfig = data;
         initConfigView(data);
+        initAgentSelector(data);
         // Load custom models and populate UI
         availableCustomModels = data.custom_models || [];
         renderCustomModelsList();
@@ -3483,6 +3779,39 @@ function showConfirmDialog({ title, message, okText, cancelText, onConfirm }) {
     overlay.classList.remove('hidden');
 }
 
+function _getChannelAgentOptions() {
+    const options = [];
+    const defaultAgent = _getDefaultAgentId();
+    const seen = new Set();
+    const pushOption = (value, label) => {
+        const key = String(value || '').trim();
+        if (!key || seen.has(key)) return;
+        seen.add(key);
+        options.push({ value: key, label: label || key });
+    };
+
+    const defaultLabel = (appConfig.default_agent && appConfig.default_agent.name) || t('agent_selector_default');
+    pushOption(defaultAgent, defaultLabel);
+    (appConfig.agents || []).forEach(agent => pushOption(agent.id, agent.name || agent.id));
+    return options;
+}
+
+function _buildChannelAgentSelectHtml(chName, selectedAgentId) {
+    const options = _getChannelAgentOptions();
+    const current = selectedAgentId || _getDefaultAgentId();
+    const optionHtml = options.map(opt => `<option value="${escapeHtml(opt.value)}" ${opt.value === current ? 'selected' : ''}>${escapeHtml(opt.label)}</option>`).join('');
+    return `
+        <div>
+            <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5">${t('channels_agent')}</label>
+            <select data-field="agent_id" data-ch="${chName}"
+                    class="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600
+                           bg-slate-50 dark:bg-white/5 text-sm text-slate-800 dark:text-slate-100
+                           focus:outline-none focus:border-primary-500 transition-colors">
+                ${optionHtml}
+            </select>
+        </div>`;
+}
+
 // =====================================================================
 // Channels View
 // =====================================================================
@@ -3531,6 +3860,7 @@ function renderActiveChannels() {
 
         const fieldsHtml = buildChannelFieldsHtml(ch.name, ch.fields || []);
         const hasFields = (ch.fields || []).length > 0;
+        const agentHtml = _buildChannelAgentSelectHtml(ch.name, ch.agent_id || _getDefaultAgentId());
 
         const weixinWaiting = ch.name === 'weixin' && ch.login_status && ch.login_status !== 'logged_in';
         const wecomNeedsCreds = ch.name === 'wecom_bot' && !_wecomBotHasCreds(ch);
@@ -3585,16 +3915,17 @@ function renderActiveChannels() {
                 </button>
                 <div id="wecom-card-scan-status" class="mt-3"></div>
             </div>` : ''}
-            ${hasFields ? `<div class="space-y-4">
-                ${fieldsHtml}
-                <div class="flex items-center justify-end gap-3 pt-1">
+            <div class="space-y-4">
+                ${agentHtml}
+                ${hasFields ? fieldsHtml : ''}
+                ${hasFields || true ? `<div class="flex items-center justify-end gap-3 pt-1">
                     <span id="ch-status-${ch.name}" class="text-xs text-primary-500 opacity-0 transition-opacity duration-300"></span>
                     <button onclick="saveChannelConfig('${ch.name}')"
                         class="px-4 py-2 rounded-lg bg-primary-500 hover:bg-primary-600 text-white text-sm font-medium
                                cursor-pointer transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
                         id="ch-save-${ch.name}">${t('channels_save')}</button>
-                </div>
-            </div>` : ''}`;
+                </div>` : ''}
+            </div>`;
 
         container.appendChild(card);
         bindSecretFieldEvents(card);
@@ -3670,10 +4001,13 @@ function saveChannelConfig(chName) {
     if (!card) return;
 
     const updates = {};
-    card.querySelectorAll('input[data-ch="' + chName + '"]').forEach(inp => {
+    card.querySelectorAll('[data-ch="' + chName + '"]').forEach(inp => {
         const key = inp.dataset.field;
+        if (!key) return;
         if (inp.type === 'checkbox') {
             updates[key] = inp.checked;
+        } else if (inp.tagName === 'SELECT') {
+            updates[key] = inp.value;
         } else {
             if (inp.dataset.masked === '1') return;
             updates[key] = inp.value;
@@ -3691,6 +4025,10 @@ function saveChannelConfig(chName) {
     .then(r => r.json())
     .then(data => {
         if (data.status === 'success') {
+            const target = channelsData.find(c => c.name === chName);
+            if (target && updates.agent_id) {
+                target.agent_id = updates.agent_id;
+            }
             showChannelStatus(chName, data.restarted ? 'channels_restarted' : 'channels_saved', false);
         } else {
             showChannelStatus(chName, 'channels_save_error', true);
@@ -3824,14 +4162,14 @@ function onAddChannelSelect(chName) {
     if (chName === 'wecom_bot') {
         actions.classList.add('hidden');
         const ch = channelsData.find(c => c.name === chName);
-        fieldsContainer.innerHTML = buildWecomBotPanel(ch);
+        fieldsContainer.innerHTML = _buildChannelAgentSelectHtml(chName, (ch && ch.agent_id) || _getDefaultAgentId()) + buildWecomBotPanel(ch);
         return;
     }
 
     const ch = channelsData.find(c => c.name === chName);
     if (!ch) return;
 
-    fieldsContainer.innerHTML = buildChannelFieldsHtml(chName, ch.fields || []);
+    fieldsContainer.innerHTML = _buildChannelAgentSelectHtml(chName, ch.agent_id || _getDefaultAgentId()) + buildChannelFieldsHtml(chName, ch.fields || []);
     bindSecretFieldEvents(fieldsContainer);
     actions.classList.remove('hidden');
 }
@@ -3843,10 +4181,13 @@ function submitAddChannel() {
 
     const fieldsContainer = document.getElementById('add-channel-fields');
     const updates = {};
-    fieldsContainer.querySelectorAll('input[data-ch="' + chName + '"]').forEach(inp => {
+    fieldsContainer.querySelectorAll('[data-ch="' + chName + '"]').forEach(inp => {
         const key = inp.dataset.field;
+        if (!key) return;
         if (inp.type === 'checkbox') {
             updates[key] = inp.checked;
+        } else if (inp.tagName === 'SELECT') {
+            updates[key] = inp.value;
         } else {
             if (inp.dataset.masked === '1') return;
             updates[key] = inp.value;
@@ -3867,6 +4208,7 @@ function submitAddChannel() {
             const ch = channelsData.find(c => c.name === chName);
             if (ch) {
                 ch.active = true;
+                if (updates.agent_id) ch.agent_id = updates.agent_id;
                 (ch.fields || []).forEach(f => {
                     if (updates[f.key] !== undefined) {
                         f.value = f.type === 'secret' ? ChannelsHandler_maskSecret(updates[f.key]) : updates[f.key];
@@ -4166,13 +4508,15 @@ function startWecomBotAuth() {
 }
 
 function connectWecomBotAfterAuth(botId, secret) {
+    const selectedAgent = document.querySelector('select[data-ch="wecom_bot"][data-field="agent_id"]');
+    const agentId = selectedAgent ? selectedAgent.value : _getDefaultAgentId();
     fetch('/api/channels', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
             action: 'connect',
             channel: 'wecom_bot',
-            config: { wecom_bot_id: botId, wecom_bot_secret: secret }
+            config: { wecom_bot_id: botId, wecom_bot_secret: secret, agent_id: agentId }
         })
     })
     .then(r => r.json())
@@ -4181,6 +4525,7 @@ function connectWecomBotAfterAuth(botId, secret) {
             const ch = channelsData.find(c => c.name === 'wecom_bot');
             if (ch) {
                 ch.active = true;
+                ch.agent_id = agentId;
                 (ch.fields || []).forEach(f => {
                     if (f.key === 'wecom_bot_id') f.value = botId;
                     if (f.key === 'wecom_bot_secret') f.value = ChannelsHandler_maskSecret(secret);

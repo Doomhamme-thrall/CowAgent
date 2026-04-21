@@ -20,6 +20,7 @@ from collections import OrderedDict
 from common import const
 from common.log import logger
 from common.singleton import singleton
+from common.utils import expand_path
 from config import conf
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"}
@@ -358,6 +359,7 @@ class WebChannel(ChatChannel):
             prompt = json_data.get('message', '')
             use_sse = json_data.get('stream', True)
             attachments = json_data.get('attachments', [])
+            agent_id = json_data.get('agent_id')
             # Per-message model override: {model, provider, api_key, api_base}
             model_override = json_data.get('model_override') or None
 
@@ -396,8 +398,19 @@ class WebChannel(ChatChannel):
 
             msg = WebMessage(self._generate_msg_id(), prompt)
             msg.from_user_id = session_id
+            msg.other_user_id = session_id
+            msg.to_user_id = session_id
 
-            context = self._compose_context(ContextType.TEXT, prompt, msg=msg, isgroup=False)
+            context_kwargs = {
+                "msg": msg,
+                "isgroup": False,
+            }
+            if agent_id is not None:
+                agent_id = str(agent_id).strip()
+                if agent_id:
+                    context_kwargs["agent_id"] = agent_id
+
+            context = self._compose_context(ContextType.TEXT, prompt, **context_kwargs)
 
             if context is None:
                 logger.warning(f"[WebChannel] Context is None for session {session_id}, message may be filtered")
@@ -405,7 +418,18 @@ class WebChannel(ChatChannel):
                     del self.sse_queues[request_id]
                 return json.dumps({"status": "error", "message": "Message was filtered"})
 
-            context["session_id"] = session_id
+            resolved_agent_id = _normalize_agent_id(context.get("agent_id") or agent_id or conf().get("default_agent_id", "main"))
+            _session_agent_id, origin_session_id = _split_agent_session_id(session_id)
+            if agent_id and str(agent_id).strip():
+                origin_session_id = origin_session_id or session_id
+            else:
+                resolved_agent_id = _normalize_agent_id(_session_agent_id or resolved_agent_id)
+
+            session_key = f"{resolved_agent_id}:{origin_session_id}" if origin_session_id else resolved_agent_id
+            context["agent_id"] = resolved_agent_id
+            context["origin_session_id"] = origin_session_id
+            context["session_key"] = session_key
+            context["session_id"] = session_key
             context["receiver"] = session_id
             context["request_id"] = request_id
 
@@ -436,7 +460,16 @@ class WebChannel(ChatChannel):
 
             threading.Thread(target=self.produce, args=(context,)).start()
 
-            return json.dumps({"status": "success", "request_id": request_id, "stream": use_sse})
+            resolved_session_key = str(context.get("session_id", session_id) or session_id)
+            resolved_agent_id, resolved_origin_session_id = _split_agent_session_id(resolved_session_key)
+            return json.dumps({
+                "status": "success",
+                "request_id": request_id,
+                "stream": use_sse,
+                "session_id": resolved_session_key,
+                "origin_session_id": resolved_origin_session_id,
+                "agent_id": resolved_agent_id,
+            })
 
         except Exception as e:
             logger.error(f"Error processing message: {e}")
@@ -865,6 +898,7 @@ class ConfigHandler:
         "ark_api_key", "minimax_api_key", "linkai_api_key", "custom_api_key",
         "agent_max_context_tokens", "agent_max_context_turns", "agent_max_steps",
         "enable_thinking", "web_password",
+        "agent_workspace", "default_agent_id", "agents", "agent_route_rules", "channel_agent_bindings",
         "default_model_web", "default_model_task", "default_model_qq",
         "default_model_vision", "default_model_image_generation",
     }
@@ -905,6 +939,8 @@ class ConfigHandler:
                     "api_key_field": p.get("api_key_field"),
                 }
 
+            agent_catalog = _build_agent_catalog(local_config)
+
             raw_pwd = local_config.get("web_password", "")
             masked_pwd = ("*" * len(raw_pwd)) if raw_pwd else ""
 
@@ -926,6 +962,10 @@ class ConfigHandler:
                 "bot_type": "openai" if local_config.get("bot_type") == "chatGPT" else local_config.get("bot_type", ""),
                 "use_linkai": bool(local_config.get("use_linkai", False)),
                 "channel_type": local_config.get("channel_type", ""),
+                "default_agent_id": agent_catalog["default_agent_id"],
+                "default_agent": agent_catalog["default_agent"],
+                "agents": agent_catalog["agents"],
+                "channel_agent_bindings": local_config.get("channel_agent_bindings", {}) or {},
                 "agent_max_context_tokens": local_config.get("agent_max_context_tokens", 50000),
                 "agent_max_context_turns": local_config.get("agent_max_context_turns", 20),
                 "agent_max_steps": local_config.get("agent_max_steps", 20),
@@ -950,24 +990,59 @@ class ConfigHandler:
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             data = json.loads(web.data())
-            updates = data.get("updates", {})
-            if not updates:
-                return json.dumps({"status": "error", "message": "no updates provided"})
-
             local_config = conf()
             applied = {}
-            for key, value in updates.items():
-                if key not in self.EDITABLE_KEYS:
-                    continue
-                if key in ("agent_max_context_tokens", "agent_max_context_turns", "agent_max_steps"):
-                    value = int(value)
-                if key in ("use_linkai", "enable_thinking"):
-                    value = bool(value)
-                local_config[key] = value
-                applied[key] = value
 
-            if not applied:
-                return json.dumps({"status": "error", "message": "no valid keys to update"})
+            agent_scope = (data.get("agent_scope") or "").strip() if isinstance(data.get("agent_scope"), str) else data.get("agent_scope")
+            if agent_scope:
+                updates = data.get("updates", {}) or {}
+                if agent_scope == "default":
+                    allowed = {"agent_workspace", "default_agent_id", "agent_max_context_tokens", "agent_max_context_turns", "agent_max_steps", "enable_thinking"}
+                    for key, value in updates.items():
+                        if key not in allowed:
+                            continue
+                        if key in ("agent_max_context_tokens", "agent_max_context_turns", "agent_max_steps"):
+                            value = _coerce_int(value, local_config.get(key, 0))
+                        if key == "enable_thinking":
+                            value = bool(value)
+                        local_config[key] = value
+                        applied[key] = value
+                elif agent_scope == "agent":
+                    agent_id = str(data.get("agent_id") or updates.get("id") or updates.get("agent_id") or "").strip()
+                    if not agent_id:
+                        return json.dumps({"status": "error", "message": "agent_id required"})
+                    updates = dict(updates)
+                    updates["id"] = agent_id
+                    agents = _upsert_agent_config(local_config, updates)
+                    local_config["agents"] = agents
+                    applied["agents"] = agents
+                else:
+                    return json.dumps({"status": "error", "message": f"unknown agent_scope: {agent_scope}"})
+            else:
+                updates = data.get("updates", {})
+                if not updates:
+                    return json.dumps({"status": "error", "message": "no updates provided"})
+
+                for key, value in updates.items():
+                    if key not in self.EDITABLE_KEYS:
+                        continue
+                    if key in ("agent_max_context_tokens", "agent_max_context_turns", "agent_max_steps"):
+                        value = _coerce_int(value, local_config.get(key, 0))
+                    if key in ("use_linkai", "enable_thinking"):
+                        value = bool(value)
+                    if key == "agents" and isinstance(value, list):
+                        local_config[key] = value
+                        applied[key] = value
+                        continue
+                    if key == "channel_agent_bindings" and isinstance(value, dict):
+                        local_config[key] = value
+                        applied[key] = value
+                        continue
+                    local_config[key] = value
+                    applied[key] = value
+
+                if not applied:
+                    return json.dumps({"status": "error", "message": "no valid keys to update"})
 
             config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
                 os.path.abspath(__file__)))), "config.json")
@@ -1250,6 +1325,8 @@ class ChannelsHandler:
         try:
             local_config = conf()
             active_channels = self._active_channel_set()
+            bindings = local_config.get("channel_agent_bindings", {}) or {}
+            default_agent_id = _normalize_agent_id(local_config.get("default_agent_id", "main"))
             channels = []
             for ch_name, ch_def in self.CHANNEL_DEFS.items():
                 fields_out = []
@@ -1273,6 +1350,7 @@ class ChannelsHandler:
                     "color": ch_def["color"],
                     "active": ch_name in active_channels,
                     "fields": fields_out,
+                    "agent_id": str(bindings.get(ch_name, default_agent_id) or default_agent_id).strip() or default_agent_id,
                 }
                 if ch_name == "weixin" and ch_name in active_channels:
                     ch_info["login_status"] = self._get_weixin_login_status()
@@ -1315,7 +1393,11 @@ class ChannelsHandler:
 
         local_config = conf()
         applied = {}
+        agent_id = None
         for key, value in updates.items():
+            if key == "agent_id":
+                agent_id = str(value or "").strip()
+                continue
             if key not in valid_keys:
                 continue
             if key in secret_keys:
@@ -1329,6 +1411,10 @@ class ChannelsHandler:
                     value = bool(value)
             local_config[key] = value
             applied[key] = value
+
+        if agent_id is not None:
+            _update_channel_agent_binding(local_config, channel_name, agent_id)
+            applied["channel_agent_bindings"] = local_config.get("channel_agent_bindings", {}) or {}
 
         if not applied:
             return json.dumps({"status": "error", "message": "no valid fields to update"})
@@ -1383,7 +1469,11 @@ class ChannelsHandler:
 
         local_config = conf()
         applied = {}
+        agent_id = None
         for key, value in updates.items():
+            if key == "agent_id":
+                agent_id = str(value or "").strip()
+                continue
             if key not in valid_keys:
                 continue
             if key in secret_keys:
@@ -1397,6 +1487,9 @@ class ChannelsHandler:
                     value = bool(value)
             local_config[key] = value
             applied[key] = value
+
+        if agent_id is not None:
+            _update_channel_agent_binding(local_config, channel_name, agent_id)
 
         existing = self._parse_channel_list(conf().get("channel_type", ""))
         if channel_name not in existing:
@@ -1413,6 +1506,7 @@ class ChannelsHandler:
             file_cfg = {}
         file_cfg.update(applied)
         file_cfg["channel_type"] = new_channel_type
+        file_cfg["channel_agent_bindings"] = local_config.get("channel_agent_bindings", {}) or {}
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(file_cfg, f, indent=4, ensure_ascii=False)
 
@@ -1468,6 +1562,7 @@ class ChannelsHandler:
         else:
             file_cfg = {}
         file_cfg["channel_type"] = new_channel_type
+        file_cfg["channel_agent_bindings"] = local_config.get("channel_agent_bindings", {}) or {}
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(file_cfg, f, indent=4, ensure_ascii=False)
 
@@ -1656,6 +1751,137 @@ def _get_workspace_root():
     return expand_path(conf().get("agent_workspace", "~/cow"))
 
 
+def _normalize_agent_id(agent_id: str, fallback: str = "main") -> str:
+    value = str(agent_id or "").strip()
+    return value or fallback
+
+
+def _split_agent_session_id(session_id: str):
+    default_agent_id = _normalize_agent_id(conf().get("default_agent_id", "main"))
+    value = str(session_id or "").strip()
+    if ":" in value:
+        agent_id, origin_session_id = value.split(":", 1)
+        agent_id = _normalize_agent_id(agent_id, default_agent_id)
+        origin_session_id = origin_session_id.strip()
+        return agent_id, origin_session_id or value
+    return default_agent_id, value
+
+
+def _coerce_int(value, fallback):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(fallback)
+
+
+def _build_agent_entry(raw: dict, default_agent_id: str, base_workspace: str, fallback_source: dict) -> dict:
+    if not isinstance(raw, dict):
+        return {}
+
+    agent_id = _normalize_agent_id(raw.get("id") or raw.get("agent_id"), default_agent_id)
+    workspace = raw.get("workspace") or raw.get("agent_workspace") or ""
+    if isinstance(workspace, str) and workspace.strip():
+        workspace = workspace.strip()
+    else:
+        workspace = fallback_source.get("agent_workspace", base_workspace) if agent_id == default_agent_id else os.path.join(base_workspace, "agents", agent_id)
+
+    return {
+        "id": agent_id,
+        "name": str(raw.get("name") or raw.get("display_name") or agent_id).strip() or agent_id,
+        "workspace": expand_path(workspace),
+        "max_context_tokens": _coerce_int(raw.get("max_context_tokens"), fallback_source.get("agent_max_context_tokens", 50000)),
+        "max_context_turns": _coerce_int(raw.get("max_context_turns"), fallback_source.get("agent_max_context_turns", 20)),
+        "max_steps": _coerce_int(raw.get("max_steps"), fallback_source.get("agent_max_steps", 20)),
+    }
+
+
+def _build_agent_catalog(local_config: dict) -> dict:
+    base_workspace = expand_path(local_config.get("agent_workspace", "~/cow"))
+    default_agent_id = _normalize_agent_id(local_config.get("default_agent_id", "main"))
+
+    default_agent = _build_agent_entry(
+        {
+            "id": default_agent_id,
+            "name": str(local_config.get("default_agent_name") or default_agent_id).strip() or default_agent_id,
+            "workspace": local_config.get("agent_workspace", base_workspace),
+            "max_context_tokens": local_config.get("agent_max_context_tokens", 50000),
+            "max_context_turns": local_config.get("agent_max_context_turns", 20),
+            "max_steps": local_config.get("agent_max_steps", 20),
+        },
+        default_agent_id,
+        base_workspace,
+        local_config,
+    )
+    default_agent["is_default"] = True
+
+    agents = []
+    raw_agents = local_config.get("agents", []) or []
+    if isinstance(raw_agents, list):
+        for item in raw_agents:
+            entry = _build_agent_entry(item, default_agent_id, base_workspace, local_config)
+            if not entry or not entry.get("id"):
+                continue
+            if entry["id"] == default_agent_id:
+                continue
+            entry["is_default"] = False
+            agents.append(entry)
+
+    return {
+        "default_agent": default_agent,
+        "agents": agents,
+        "default_agent_id": default_agent_id,
+    }
+
+
+def _upsert_agent_config(local_config: dict, agent_updates: dict) -> list:
+    agents = list(local_config.get("agents", []) or [])
+    agent_id = _normalize_agent_id(agent_updates.get("id") or agent_updates.get("agent_id"), "")
+    if not agent_id:
+        return agents
+
+    target = None
+    for idx, item in enumerate(agents):
+        if isinstance(item, dict) and str(item.get("id", "") or "").strip() == agent_id:
+            target = idx
+            break
+
+    if agent_updates.get("delete"):
+        if target is not None:
+            agents.pop(target)
+        return agents
+
+    merged = dict(agents[target]) if target is not None and isinstance(agents[target], dict) else {}
+    merged["id"] = agent_id
+    if agent_updates.get("name") is not None:
+        merged["name"] = str(agent_updates.get("name") or "").strip() or agent_id
+    if agent_updates.get("workspace") is not None:
+        merged["workspace"] = str(agent_updates.get("workspace") or "").strip()
+    if agent_updates.get("max_context_tokens") is not None:
+        merged["max_context_tokens"] = _coerce_int(agent_updates.get("max_context_tokens"), merged.get("max_context_tokens", 50000))
+    if agent_updates.get("max_context_turns") is not None:
+        merged["max_context_turns"] = _coerce_int(agent_updates.get("max_context_turns"), merged.get("max_context_turns", 20))
+    if agent_updates.get("max_steps") is not None:
+        merged["max_steps"] = _coerce_int(agent_updates.get("max_steps"), merged.get("max_steps", 20))
+
+    merged = {k: v for k, v in merged.items() if v not in (None, "")}
+    if target is None:
+        agents.append(merged)
+    else:
+        agents[target] = merged
+    return agents
+
+
+def _update_channel_agent_binding(local_config: dict, channel_name: str, agent_id: str):
+    bindings = dict(local_config.get("channel_agent_bindings", {}) or {})
+    agent_id = str(agent_id or "").strip()
+    if agent_id:
+        bindings[channel_name] = agent_id
+    else:
+        bindings.pop(channel_name, None)
+    local_config["channel_agent_bindings"] = bindings
+    return bindings
+
+
 class ToolsHandler:
     def GET(self):
         _require_auth()
@@ -1793,6 +2019,15 @@ class SessionsHandler:
                 page=int(params.page),
                 page_size=int(params.page_size),
             )
+            sessions = []
+            for item in result.get("sessions", []) or []:
+                session_item = dict(item)
+                session_id = str(session_item.get("session_id", "") or "")
+                agent_id, origin_session_id = _split_agent_session_id(session_id)
+                session_item.setdefault("agent_id", agent_id)
+                session_item.setdefault("origin_session_id", origin_session_id)
+                sessions.append(session_item)
+            result["sessions"] = sessions
             return json.dumps({"status": "success", **result}, ensure_ascii=False)
         except Exception as e:
             logger.error(f"[WebChannel] Sessions API error: {e}")
@@ -1816,9 +2051,8 @@ class SessionDetailHandler:
             try:
                 from bridge.bridge import Bridge
                 ab = Bridge().get_agent_bridge()
-                if session_id in ab.agents:
-                    del ab.agents[session_id]
-                    logger.info(f"[WebChannel] Removed agent instance for session {session_id}")
+                ab.clear_session(session_id)
+                logger.info(f"[WebChannel] Removed agent instance for session {session_id}")
             except Exception:
                 pass
 
@@ -1897,9 +2131,8 @@ class SessionClearContextHandler:
                 from bridge.bridge import Bridge
                 bridge = Bridge()
                 ab = bridge.get_agent_bridge()
-                if session_id in ab.agents:
-                    del ab.agents[session_id]
-                    logger.info(f"[WebChannel] Cleared agent instance for session {session_id}")
+                ab.clear_session(session_id)
+                logger.info(f"[WebChannel] Cleared agent instance for session {session_id}")
             except Exception:
                 pass
 
@@ -1944,11 +2177,10 @@ class SessionRollbackHandler:
             try:
                 from bridge.bridge import Bridge
                 ab = Bridge().get_agent_bridge()
-                if session_id in ab.agents:
-                    del ab.agents[session_id]
-                    logger.info(
-                        f"[WebChannel] Cleared agent instance after rollback: session={session_id}"
-                    )
+                ab.clear_session(session_id)
+                logger.info(
+                    f"[WebChannel] Cleared agent instance after rollback: session={session_id}"
+                )
             except Exception:
                 pass
 
