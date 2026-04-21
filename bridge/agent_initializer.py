@@ -46,9 +46,11 @@ class AgentInitializer:
             Initialized agent instance
         """
         from config import conf
+
+        agent_profile = self._resolve_agent_profile(agent_id)
         
         # Resolve workspace by agent_id for multi-agent isolation.
-        workspace_root = self._resolve_workspace_root(agent_id)
+        workspace_root = agent_profile["workspace"]
         
         # Migrate API keys
         self._migrate_config_to_env(workspace_root)
@@ -92,8 +94,8 @@ class AgentInitializer:
         
         # Get cost control parameters
         from config import conf
-        max_steps = conf().get("agent_max_steps", 20)
-        max_context_tokens = conf().get("agent_max_context_tokens", 50000)
+        max_steps = agent_profile["max_steps"]
+        max_context_tokens = agent_profile["max_context_tokens"]
         
         # Create agent
         agent = self.agent_bridge.create_agent(
@@ -116,12 +118,58 @@ class AgentInitializer:
 
         # Restore persisted conversation history for this session
         if session_id:
-            self._restore_conversation_history(agent, session_id)
+            self._restore_conversation_history(agent, session_id, agent_id=agent_id)
 
         # Start daily memory flush timer (once, on first agent init regardless of session)
         self._start_daily_flush_timer()
 
         return agent
+
+    @staticmethod
+    def _resolve_agent_profile(agent_id: Optional[str]) -> dict:
+        """Resolve workspace and runtime limits for the given agent id."""
+        from config import conf
+
+        base_workspace = expand_path(conf().get("agent_workspace", "~/cow"))
+        default_agent_id = str(conf().get("default_agent_id", "main") or "main").strip() or "main"
+        normalized_agent_id = str(agent_id or default_agent_id).strip() or default_agent_id
+
+        profile = {
+            "id": normalized_agent_id,
+            "workspace": base_workspace if normalized_agent_id == default_agent_id else os.path.join(base_workspace, "agents", normalized_agent_id),
+            "max_steps": int(conf().get("agent_max_steps", 20) or 20),
+            "max_context_tokens": int(conf().get("agent_max_context_tokens", 50000) or 50000),
+            "max_context_turns": int(conf().get("agent_max_context_turns", 20) or 20),
+        }
+
+        agents_cfg = conf().get("agents", []) or []
+        if isinstance(agents_cfg, list):
+            for item in agents_cfg:
+                if not isinstance(item, dict):
+                    continue
+                item_id = str(item.get("id", "") or "").strip()
+                if item_id != normalized_agent_id:
+                    continue
+
+                custom_workspace = item.get("workspace") or item.get("agent_workspace")
+                if isinstance(custom_workspace, str) and custom_workspace.strip():
+                    profile["workspace"] = expand_path(custom_workspace.strip())
+
+                for field, default_key in (
+                    ("max_steps", "agent_max_steps"),
+                    ("max_context_tokens", "agent_max_context_tokens"),
+                    ("max_context_turns", "agent_max_context_turns"),
+                ):
+                    raw_value = item.get(field)
+                    if raw_value in (None, ""):
+                        continue
+                    try:
+                        profile[field] = int(raw_value)
+                    except (TypeError, ValueError):
+                        profile[field] = int(conf().get(default_key, profile[field]) or profile[field])
+                break
+
+        return profile
 
     @staticmethod
     def _resolve_workspace_root(agent_id: Optional[str]) -> str:
@@ -133,29 +181,9 @@ class AgentInitializer:
         2. Default agent uses agent_workspace directly.
         3. Non-default agents fall back to {agent_workspace}/agents/{agent_id}.
         """
-        from config import conf
+        return AgentInitializer._resolve_agent_profile(agent_id)["workspace"]
 
-        base_workspace = expand_path(conf().get("agent_workspace", "~/cow"))
-        default_agent_id = str(conf().get("default_agent_id", "main") or "main").strip() or "main"
-        normalized_agent_id = str(agent_id or default_agent_id).strip() or default_agent_id
-
-        agents_cfg = conf().get("agents", []) or []
-        if isinstance(agents_cfg, list):
-            for item in agents_cfg:
-                if not isinstance(item, dict):
-                    continue
-                if str(item.get("id", "") or "").strip() != normalized_agent_id:
-                    continue
-                custom_workspace = item.get("workspace") or item.get("agent_workspace")
-                if isinstance(custom_workspace, str) and custom_workspace.strip():
-                    return expand_path(custom_workspace.strip())
-
-        if normalized_agent_id == default_agent_id:
-            return base_workspace
-
-        return os.path.join(base_workspace, "agents", normalized_agent_id)
-
-    def _restore_conversation_history(self, agent, session_id: str) -> None:
+    def _restore_conversation_history(self, agent, session_id: str, agent_id: Optional[str] = None) -> None:
         """
         Load persisted conversation messages from SQLite and inject them
         into the agent's in-memory message list.
@@ -176,7 +204,8 @@ class AgentInitializer:
         try:
             from agent.memory import get_conversation_store
             store = get_conversation_store()
-            max_turns = conf().get("agent_max_context_turns", 20)
+            agent_profile = self._resolve_agent_profile(agent_id)
+            max_turns = agent_profile["max_context_turns"]
             restore_turns = max(3, max_turns // 6)
             saved = store.load_messages(session_id, max_turns=restore_turns)
 
