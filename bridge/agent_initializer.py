@@ -34,20 +34,21 @@ class AgentInitializer:
         self.bridge = bridge
         self.agent_bridge = agent_bridge
     
-    def initialize_agent(self, session_id: Optional[str] = None) -> Agent:
+    def initialize_agent(self, session_id: Optional[str] = None, agent_id: Optional[str] = None) -> Agent:
         """
         Initialize agent for a session
         
         Args:
             session_id: Session ID (None for default agent)
+            agent_id: Agent identifier for isolated workspace routing
         
         Returns:
             Initialized agent instance
         """
         from config import conf
         
-        # Get workspace from config
-        workspace_root = expand_path(conf().get("agent_workspace", "~/cow"))
+        # Resolve workspace by agent_id for multi-agent isolation.
+        workspace_root = self._resolve_workspace_root(agent_id)
         
         # Migrate API keys
         self._migrate_config_to_env(workspace_root)
@@ -122,6 +123,38 @@ class AgentInitializer:
 
         return agent
 
+    @staticmethod
+    def _resolve_workspace_root(agent_id: Optional[str]) -> str:
+        """
+        Resolve workspace root for an agent.
+
+        Rules:
+        1. If config.agents has a matching entry with workspace, use it.
+        2. Default agent uses agent_workspace directly.
+        3. Non-default agents fall back to {agent_workspace}/agents/{agent_id}.
+        """
+        from config import conf
+
+        base_workspace = expand_path(conf().get("agent_workspace", "~/cow"))
+        default_agent_id = str(conf().get("default_agent_id", "main") or "main").strip() or "main"
+        normalized_agent_id = str(agent_id or default_agent_id).strip() or default_agent_id
+
+        agents_cfg = conf().get("agents", []) or []
+        if isinstance(agents_cfg, list):
+            for item in agents_cfg:
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("id", "") or "").strip() != normalized_agent_id:
+                    continue
+                custom_workspace = item.get("workspace") or item.get("agent_workspace")
+                if isinstance(custom_workspace, str) and custom_workspace.strip():
+                    return expand_path(custom_workspace.strip())
+
+        if normalized_agent_id == default_agent_id:
+            return base_workspace
+
+        return os.path.join(base_workspace, "agents", normalized_agent_id)
+
     def _restore_conversation_history(self, agent, session_id: str) -> None:
         """
         Load persisted conversation messages from SQLite and inject them
@@ -146,6 +179,21 @@ class AgentInitializer:
             max_turns = conf().get("agent_max_context_turns", 20)
             restore_turns = max(3, max_turns // 6)
             saved = store.load_messages(session_id, max_turns=restore_turns)
+
+            # Lazy migration fallback: before multi-agent session_key rollout,
+            # history was stored by plain origin session_id. For default agent,
+            # read legacy history once when the new key has no data.
+            if not saved and ":" in session_id:
+                default_agent_id = str(conf().get("default_agent_id", "main") or "main").strip() or "main"
+                agent_prefix, legacy_session_id = session_id.split(":", 1)
+                if agent_prefix == default_agent_id and legacy_session_id:
+                    saved = store.load_messages(legacy_session_id, max_turns=restore_turns)
+                    if saved:
+                        logger.info(
+                            f"[AgentInitializer] Loaded legacy history from session={legacy_session_id} "
+                            f"for new session key={session_id}"
+                        )
+
             if saved:
                 filtered = self._filter_text_only_messages(saved)
                 if filtered:

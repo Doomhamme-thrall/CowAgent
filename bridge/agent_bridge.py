@@ -3,7 +3,7 @@ Agent Bridge - Integrates Agent system with existing COW bridge
 """
 
 import os
-from typing import Optional, List
+from typing import Optional, List, Tuple
 
 from agent.protocol import Agent, LLMModel, LLMRequest
 from bridge.agent_event_handler import AgentEventHandler
@@ -308,13 +308,54 @@ class AgentBridge:
     
     def __init__(self, bridge: Bridge):
         self.bridge = bridge
-        self.agents = {}  # session_id -> Agent instance mapping
+        self.agents = {}  # agent_instance_key -> Agent instance mapping
         self.default_agent = None  # For backward compatibility (no session_id)
         self.agent: Optional[Agent] = None
         self.scheduler_initialized = False
         
         # Create helper instances
         self.initializer = AgentInitializer(bridge, self)
+
+    @staticmethod
+    def _normalize_agent_id(agent_id: Optional[str]) -> str:
+        value = str(agent_id or "").strip()
+        return value or "main"
+
+    @staticmethod
+    def _build_agent_instance_key(agent_id: str, session_key: str) -> str:
+        return f"{agent_id}::{session_key}"
+
+    def _resolve_agent_context(self, context: Optional[Context]) -> Tuple[str, Optional[str], Optional[str]]:
+        """
+        Resolve agent/session context from incoming request context.
+
+        Returns:
+            (agent_id, session_key, origin_session_id)
+        """
+        from config import conf
+
+        default_agent_id = self._normalize_agent_id(conf().get("default_agent_id", "main"))
+        if not context:
+            return default_agent_id, None, None
+
+        raw_agent_id = context.get("agent_id")
+        agent_id = self._normalize_agent_id(raw_agent_id or default_agent_id)
+
+        session_key = context.kwargs.get("session_key") or context.get("session_key")
+        origin_session_id = context.kwargs.get("origin_session_id") or context.get("origin_session_id")
+        legacy_session_id = context.kwargs.get("session_id") or context.get("session_id")
+
+        if not session_key and legacy_session_id:
+            legacy_session_id = str(legacy_session_id)
+            prefix = f"{agent_id}:"
+            session_key = legacy_session_id if legacy_session_id.startswith(prefix) else f"{prefix}{legacy_session_id}"
+
+        if not origin_session_id and session_key:
+            sk = str(session_key)
+            prefix = f"{agent_id}:"
+            origin_session_id = sk[len(prefix):] if sk.startswith(prefix) else sk
+
+        return agent_id, str(session_key) if session_key else None, str(origin_session_id) if origin_session_id else None
     def create_agent(self, system_prompt: str, tools: List = None, **kwargs) -> Agent:
         """
         Create the super agent with COW integration
@@ -372,37 +413,51 @@ class AgentBridge:
 
         return agent
     
-    def get_agent(self, session_id: str = None) -> Optional[Agent]:
+    def get_agent(
+        self,
+        session_key: str = None,
+        agent_id: str = None,
+        session_id: str = None,
+    ) -> Optional[Agent]:
         """
         Get agent instance for the given session
         
         Args:
-            session_id: Session identifier (e.g., user_id). If None, returns default agent.
+            session_key: Session identifier (e.g., "main:user_id"). If None, returns default agent.
+            agent_id: Agent identifier for isolation routing.
+            session_id: Backward-compatible alias of session_key.
         
         Returns:
             Agent instance for this session
         """
-        # If no session_id, use default agent (backward compatibility)
-        if session_id is None:
+        if session_key is None and session_id is not None:
+            session_key = session_id
+
+        # If no session_key, use default agent (backward compatibility)
+        if session_key is None:
             if self.default_agent is None:
                 self._init_default_agent()
             return self.default_agent
+
+        normalized_agent_id = self._normalize_agent_id(agent_id)
+        instance_key = self._build_agent_instance_key(normalized_agent_id, session_key)
         
         # Check if agent exists for this session
-        if session_id not in self.agents:
-            self._init_agent_for_session(session_id)
+        if instance_key not in self.agents:
+            self._init_agent_for_session(session_key, normalized_agent_id)
         
-        return self.agents[session_id]
+        return self.agents[instance_key]
     
     def _init_default_agent(self):
         """Initialize default super agent"""
-        agent = self.initializer.initialize_agent(session_id=None)
+        agent = self.initializer.initialize_agent(session_id=None, agent_id=None)
         self.default_agent = agent
     
-    def _init_agent_for_session(self, session_id: str):
+    def _init_agent_for_session(self, session_key: str, agent_id: str):
         """Initialize agent for a specific session"""
-        agent = self.initializer.initialize_agent(session_id=session_id)
-        self.agents[session_id] = agent
+        instance_key = self._build_agent_instance_key(agent_id, session_key)
+        agent = self.initializer.initialize_agent(session_id=session_key, agent_id=agent_id)
+        self.agents[instance_key] = agent
     
     def agent_reply(self, query: str, context: Context = None, 
                    on_event=None, clear_history: bool = False) -> Reply:
@@ -418,15 +473,15 @@ class AgentBridge:
         Returns:
             Reply object
         """
-        session_id = None
+        session_key = None
+        agent_id = None
         agent = None
         try:
-            # Extract session_id from context for user isolation
-            if context:
-                session_id = context.kwargs.get("session_id") or context.get("session_id")
+            # Extract agent/session routing info.
+            agent_id, session_key, _origin_session_id = self._resolve_agent_context(context)
             
             # Get agent for this session (will auto-initialize if needed)
-            agent = self.get_agent(session_id=session_id)
+            agent = self.get_agent(session_key=session_key, agent_id=agent_id)
             if not agent:
                 return Reply(ReplyType.ERROR, "Failed to initialize super agent")
             
@@ -457,13 +512,14 @@ class AgentBridge:
             # Pass context metadata to model for downstream API requests
             if context and hasattr(agent, 'model'):
                 agent.model.channel_type = context.get("channel_type", "")
-                agent.model.session_id = session_id or ""
+                agent.model.session_id = session_key or ""
+                agent.model.agent_id = agent_id or ""
                 # Apply per-request model override (from chat model selector)
                 model_override = context.get("model_override")
                 agent.model._current_override = model_override if model_override else None
 
             # Store session_id on agent so executor can clear DB on fatal errors
-            agent._current_session_id = session_id
+            agent._current_session_id = session_key
 
             try:
                 # Use agent's run_stream method with event handler
@@ -481,19 +537,19 @@ class AgentBridge:
                 event_handler.log_summary()
 
             # Persist new messages generated during this run
-            if session_id:
+            if session_key:
                 channel_type = (context.get("channel_type") or "") if context else ""
                 new_messages = getattr(agent, '_last_run_new_messages', [])
                 if new_messages:
-                    self._persist_messages(session_id, list(new_messages), channel_type)
+                    self._persist_messages(session_key, list(new_messages), channel_type)
                 else:
                     with agent.messages_lock:
                         msg_count = len(agent.messages)
                     if msg_count == 0:
                         try:
                             from agent.memory import get_conversation_store
-                            get_conversation_store().clear_session(session_id)
-                            logger.info(f"[AgentBridge] Cleared DB for recovered session: {session_id}")
+                            get_conversation_store().clear_session(session_key)
+                            logger.info(f"[AgentBridge] Cleared DB for recovered session: {session_key}")
                         except Exception as e:
                             logger.warning(f"[AgentBridge] Failed to clear DB after recovery: {e}")
             
@@ -517,14 +573,14 @@ class AgentBridge:
             logger.error(f"Agent reply error: {e}")
             # If the agent cleared its messages due to format error / overflow,
             # also purge the DB so the next request starts clean.
-            if session_id and agent:
+            if session_key and agent:
                 try:
                     with agent.messages_lock:
                         msg_count = len(agent.messages)
                     if msg_count == 0:
                         from agent.memory import get_conversation_store
-                        get_conversation_store().clear_session(session_id)
-                        logger.info(f"[AgentBridge] Cleared DB for session after error: {session_id}")
+                        get_conversation_store().clear_session(session_key)
+                        logger.info(f"[AgentBridge] Cleared DB for session after error: {session_key}")
                 except Exception as db_err:
                     logger.warning(f"[AgentBridge] Failed to clear DB after error: {db_err}")
             return Reply(ReplyType.ERROR, f"Agent error: {str(e)}")
@@ -715,9 +771,18 @@ class AgentBridge:
         Args:
             session_id: Session identifier to clear
         """
+        # Exact key support (agent_instance_key)
         if session_id in self.agents:
             logger.info(f"[AgentBridge] Clearing session: {session_id}")
             del self.agents[session_id]
+            return
+
+        # Backward compatibility: if caller passes plain session_key, clear
+        # all matching agent instance entries.
+        keys_to_delete = [k for k in self.agents.keys() if k.endswith(f"::{session_id}")]
+        for key in keys_to_delete:
+            logger.info(f"[AgentBridge] Clearing session: {key}")
+            del self.agents[key]
     
     def clear_all_sessions(self):
         """Clear all agent sessions"""

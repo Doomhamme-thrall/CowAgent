@@ -201,6 +201,9 @@ available_setting = {
     "web_session_expire_days": 30,  # Auth session expiry in days
     "agent": True,  # 是否开启Agent模式
     "agent_workspace": "~/cow",  # agent工作空间路径，用于存储skills、memory等
+    "default_agent_id": "main",  # 默认agent id
+    "agents": [],  # 多agent配置列表: [{"id":"main","workspace":"~/cow"}, {"id":"sales","workspace":"~/cow/agents/sales"}]
+    "agent_route_rules": [],  # 可选路由规则: [{"channel_type":"web","isgroup":false,"agent_id":"main"}]
     "agent_max_context_tokens": 50000,  # Agent模式下最大上下文tokens
     "agent_max_context_turns": 20,  # Agent模式下最大上下文记忆轮次
     "agent_max_steps": 20,  # Agent模式下单次运行最大决策步数
