@@ -750,7 +750,7 @@ let historyPage = 0;       // last page fetched (0 = nothing fetched yet)
 let historyHasMore = false;
 let historyLoading = false;
 
-fetch('/config').then(r => r.json()).then(data => {
+fetch(`/config?_=${Date.now()}`).then(r => r.json()).then(data => {
     if (data.status === 'success') {
         appConfig = data;
         const title = data.title || 'CowAgent';
@@ -3310,7 +3310,7 @@ function savePasswordConfig() {
 }
 
 function loadConfigView() {
-    fetch('/config').then(r => r.json()).then(data => {
+    fetch(`/config?_=${Date.now()}`).then(r => r.json()).then(data => {
         if (data.status !== 'success') return;
         appConfig = data;
         initConfigView(data);

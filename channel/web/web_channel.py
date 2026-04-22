@@ -913,6 +913,9 @@ class ConfigHandler:
     def GET(self):
         _require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
+        web.header('Cache-Control', 'no-cache, no-store, must-revalidate')
+        web.header('Pragma', 'no-cache')
+        web.header('Expires', '0')
         try:
             local_config = conf()
             use_agent = local_config.get("agent", False)
@@ -1880,7 +1883,8 @@ def _update_channel_agent_binding(local_config: dict, channel_name: str, agent_i
 def _ensure_agent_workspace(workspace: str):
     workspace = expand_path(str(workspace or "").strip())
     if workspace:
-        os.makedirs(workspace, exist_ok=True)
+        from agent.prompt import ensure_workspace
+        ensure_workspace(workspace, create_templates=True)
 
 
 class ToolsHandler:
