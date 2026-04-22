@@ -2829,6 +2829,14 @@ function _findConfigAgent(agentId) {
     return configAgentProfiles.find(agent => agent.id === agentId) || null;
 }
 
+function _deriveAgentIdFromWorkspace(workspace) {
+    const value = String(workspace || '').trim().replace(/[\\/]+$/, '');
+    if (!value) return '';
+    const parts = value.split(/[\\/]+/);
+    const last = parts[parts.length - 1] || '';
+    return last.trim();
+}
+
 function _renderConfigAgentForm(agent) {
     const defaultAgent = _getConfigDefaultAgent();
     const isNew = configSelectedAgentId === '__new__';
@@ -3207,10 +3215,16 @@ function saveAgentConfig() {
     const idInput = document.getElementById('cfg-agent-id');
     const nameInput = document.getElementById('cfg-agent-name');
     const workspaceInput = document.getElementById('cfg-agent-workspace');
+    const workspaceValue = (workspaceInput && workspaceInput.value.trim()) || '';
+    let agentIdValue = (idInput && idInput.value.trim()) || '';
+    if (configSelectedAgentId === '__new__' && !agentIdValue) {
+        agentIdValue = _deriveAgentIdFromWorkspace(workspaceValue);
+        if (idInput && agentIdValue) idInput.value = agentIdValue;
+    }
     const updates = {
-        id: (idInput && idInput.value.trim()) || '',
+        id: agentIdValue,
         name: (nameInput && nameInput.value.trim()) || '',
-        workspace: (workspaceInput && workspaceInput.value.trim()) || '',
+        workspace: workspaceValue,
         max_context_tokens: parseInt(document.getElementById('cfg-max-tokens').value) || 50000,
         max_context_turns: parseInt(document.getElementById('cfg-max-turns').value) || 20,
         max_steps: parseInt(document.getElementById('cfg-max-steps').value) || 20,
