@@ -505,8 +505,12 @@ class AgentInitializer:
     def _initialize_skill_manager(self, workspace_root: str, session_id: Optional[str] = None):
         """Initialize skill manager"""
         try:
+            from config import conf
             from agent.skills import SkillManager
-            skill_manager = SkillManager(custom_dir=os.path.join(workspace_root, "skills"))
+            shared_workspace = expand_path(conf().get("agent_workspace", "~/cow"))
+            shared_skills_dir = os.path.join(shared_workspace, "skills")
+            os.makedirs(shared_skills_dir, exist_ok=True)
+            skill_manager = SkillManager(custom_dir=shared_skills_dir)
             return skill_manager
         except Exception as e:
             logger.warning(f"[AgentInitializer] Failed to initialize SkillManager: {e}")

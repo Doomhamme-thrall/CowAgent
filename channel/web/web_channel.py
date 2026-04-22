@@ -1007,8 +1007,13 @@ class ConfigHandler:
                             value = bool(value)
                         local_config[key] = value
                         applied[key] = value
+                    if "agent_workspace" in applied:
+                        _ensure_agent_workspace(applied["agent_workspace"])
                 elif agent_scope == "agent":
+                    workspace_value = str(updates.get("workspace") or updates.get("agent_workspace") or "").strip()
                     agent_id = str(data.get("agent_id") or updates.get("id") or updates.get("agent_id") or "").strip()
+                    if not agent_id and workspace_value:
+                        agent_id = os.path.basename(workspace_value.rstrip("/\\"))
                     if not agent_id:
                         return json.dumps({"status": "error", "message": "agent_id required"})
                     updates = dict(updates)
@@ -1016,6 +1021,9 @@ class ConfigHandler:
                     agents = _upsert_agent_config(local_config, updates)
                     local_config["agents"] = agents
                     applied["agents"] = agents
+                    target_agent = next((item for item in agents if isinstance(item, dict) and str(item.get("id", "") or "").strip() == agent_id), None)
+                    if target_agent and target_agent.get("workspace"):
+                        _ensure_agent_workspace(target_agent["workspace"])
                 else:
                     return json.dumps({"status": "error", "message": f"unknown agent_scope: {agent_scope}"})
             else:
@@ -1880,6 +1888,12 @@ def _update_channel_agent_binding(local_config: dict, channel_name: str, agent_i
         bindings.pop(channel_name, None)
     local_config["channel_agent_bindings"] = bindings
     return bindings
+
+
+def _ensure_agent_workspace(workspace: str):
+    workspace = expand_path(str(workspace or "").strip())
+    if workspace:
+        os.makedirs(workspace, exist_ok=True)
 
 
 class ToolsHandler:
