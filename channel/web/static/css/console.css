@@ -676,6 +676,10 @@
     box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4);
 }
 .cfg-dropdown.open .cfg-dropdown-menu { display: block; }
+.cfg-dropdown.cfg-dropdown-up .cfg-dropdown-menu {
+    top: auto;
+    bottom: calc(100% + 4px);
+}
 .cfg-dropdown-item {
     display: flex;
     align-items: center;
