@@ -61,8 +61,12 @@ class Agent:
             else:
                 # Auto-create skill manager
                 try:
+                    from config import conf
+                    from common.utils import expand_path
                     from agent.skills import SkillManager
-                    custom_dir = os.path.join(workspace_dir, "skills") if workspace_dir else None
+                    shared_workspace = expand_path(conf().get("agent_workspace", "~/cow"))
+                    custom_dir = os.path.join(shared_workspace, "skills")
+                    os.makedirs(custom_dir, exist_ok=True)
                     self.skill_manager = SkillManager(custom_dir=custom_dir)
                     logger.debug(f"Initialized SkillManager with {len(self.skill_manager.skills)} skills")
                 except Exception as e:

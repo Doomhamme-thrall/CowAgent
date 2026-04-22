@@ -139,6 +139,13 @@ class Read(BaseTool):
         path = expand_path(path)
         if os.path.isabs(path):
             return path
+
+        normalized = path.replace('\\', '/').lstrip('./')
+        if normalized == 'knowledge' or normalized.startswith('knowledge/') or normalized == 'skills' or normalized.startswith('skills/'):
+            from config import conf
+            shared_workspace = expand_path(conf().get("agent_workspace", "~/cow"))
+            return os.path.abspath(os.path.join(shared_workspace, normalized))
+
         return os.path.abspath(os.path.join(self.cwd, path))
     
     def _return_file_metadata(self, absolute_path: str, file_type: str, file_size: int) -> ToolResult:

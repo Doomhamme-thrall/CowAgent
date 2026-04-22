@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 from common.log import logger
+from common.utils import expand_path
 from config import conf
 
 
@@ -26,8 +27,9 @@ class KnowledgeService:
     """
 
     def __init__(self, workspace_root: str):
-        self.workspace_root = workspace_root
-        self.knowledge_dir = os.path.join(workspace_root, "knowledge")
+        shared_workspace = expand_path(conf().get("agent_workspace", "~/cow"))
+        self.workspace_root = shared_workspace
+        self.knowledge_dir = os.path.join(shared_workspace, "knowledge")
 
     # ------------------------------------------------------------------
     # list — directory tree with stats

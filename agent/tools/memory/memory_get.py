@@ -78,18 +78,29 @@ class MemoryGetTool(BaseTool):
             return ToolResult.fail("Error: path parameter is required")
         
         try:
+            from config import conf
+            from common.utils import expand_path
+            from pathlib import Path
+
             workspace_dir = self.memory_manager.config.get_workspace()
+            shared_workspace = Path(expand_path(conf().get("agent_workspace", "~/cow")))
             
             # Auto-prepend memory/ if not present and not absolute path
             # Exceptions: MEMORY.md in root, knowledge/ files at workspace root
             if not path.startswith('memory/') and not path.startswith('knowledge/') and not path.startswith('/') and path != 'MEMORY.md':
                 path = f'memory/{path}'
-            
-            file_path = (workspace_dir / path).resolve()
-            workspace_resolved = workspace_dir.resolve()
-            
-            if not str(file_path).startswith(str(workspace_resolved) + '/') and file_path != workspace_resolved:
-                return ToolResult.fail(f"Error: Access denied: path outside workspace")
+
+            normalized = path.replace('\\', '/').lstrip('./')
+            if normalized.startswith('knowledge/'):
+                file_path = (shared_workspace / normalized).resolve()
+                knowledge_root = (shared_workspace / 'knowledge').resolve()
+                if file_path != knowledge_root and knowledge_root not in file_path.parents:
+                    return ToolResult.fail("Error: Access denied: path outside shared knowledge")
+            else:
+                file_path = (workspace_dir / path).resolve()
+                workspace_resolved = workspace_dir.resolve()
+                if file_path != workspace_resolved and workspace_resolved not in file_path.parents:
+                    return ToolResult.fail("Error: Access denied: path outside workspace")
             
             if not file_path.exists():
                 return ToolResult.fail(f"Error: File not found: {path}")

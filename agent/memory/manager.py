@@ -15,6 +15,7 @@ from agent.memory.storage import MemoryStorage, MemoryChunk, SearchResult
 from agent.memory.chunker import TextChunker
 from agent.memory.embedding import create_embedding_provider, EmbeddingProvider
 from agent.memory.summarizer import MemoryFlushManager, create_memory_files_if_needed
+from common.utils import expand_path
 
 
 class MemoryManager:
@@ -320,7 +321,8 @@ class MemoryManager:
         # Scan knowledge directory (structured knowledge wiki)
         from config import conf
         if conf().get("knowledge", True):
-            knowledge_dir = Path(workspace_dir) / "knowledge"
+            shared_workspace = Path(expand_path(conf().get("agent_workspace", "~/cow")))
+            knowledge_dir = shared_workspace / "knowledge"
             if knowledge_dir.exists():
                 for file_path in knowledge_dir.rglob("*.md"):
                     await self._sync_file(file_path, "knowledge", "shared", None)
@@ -341,7 +343,13 @@ class MemoryManager:
         
         # Get relative path
         workspace_dir = self.config.get_workspace()
-        rel_path = str(file_path.relative_to(workspace_dir))
+        if source == "knowledge":
+            from config import conf
+            shared_workspace = Path(expand_path(conf().get("agent_workspace", "~/cow")))
+            knowledge_root = (shared_workspace / "knowledge").resolve()
+            rel_path = str(Path("knowledge") / file_path.resolve().relative_to(knowledge_root))
+        else:
+            rel_path = str(file_path.relative_to(workspace_dir))
         
         # Check if file changed
         stored_hash = self.storage.get_file_hash(rel_path)

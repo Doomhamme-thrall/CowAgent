@@ -10,6 +10,7 @@ from typing import List, Dict, Optional, Any
 from dataclasses import dataclass
 
 from common.log import logger
+from common.utils import expand_path
 from config import conf
 
 
@@ -329,7 +330,8 @@ def _build_memory_section(memory_manager: Any, tools: Optional[List[Any]], langu
 
 def _build_knowledge_section(workspace_dir: str, language: str) -> List[str]:
     """Build knowledge wiki section. Injects knowledge/index.md when present."""
-    index_path = os.path.join(workspace_dir, "knowledge", "index.md")
+    shared_workspace = expand_path(conf().get("agent_workspace", "~/cow"))
+    index_path = os.path.join(shared_workspace, "knowledge", "index.md")
     if not os.path.exists(index_path):
         return []
 
