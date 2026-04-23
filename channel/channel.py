@@ -83,6 +83,55 @@ class Channel(object):
                 if context and "channel_type" not in context:
                     context["channel_type"] = self.channel_type
 
+                # Ensure agent/session routing metadata exists even when a
+                # channel overrides _compose_context and skips ChatChannel logic.
+                if context:
+                    default_agent_id = str(conf().get("default_agent_id", "main") or "main").strip() or "main"
+                    resolved_agent_id = str(context.get("agent_id", "") or "").strip()
+                    if not resolved_agent_id:
+                        resolver = getattr(self, "_resolve_agent_id", None)
+                        if callable(resolver):
+                            try:
+                                resolved_agent_id = str(resolver(context) or "").strip()
+                            except Exception:
+                                resolved_agent_id = ""
+                    if not resolved_agent_id:
+                        bindings = conf().get("channel_agent_bindings", {}) or {}
+                        ch_type = str(context.get("channel_type", "") or self.channel_type or "").strip()
+                        if isinstance(bindings, dict):
+                            resolved_agent_id = str(bindings.get(ch_type, "") or "").strip()
+                    if not resolved_agent_id:
+                        resolved_agent_id = default_agent_id
+
+                    session_key = context.get("session_key")
+                    origin_session_id = context.get("origin_session_id")
+                    legacy_session_id = context.get("session_id")
+                    if not origin_session_id and legacy_session_id:
+                        legacy_session_id = str(legacy_session_id)
+                        prefix = f"{resolved_agent_id}:"
+                        origin_session_id = legacy_session_id[len(prefix):] if legacy_session_id.startswith(prefix) else legacy_session_id
+                    if not session_key and origin_session_id:
+                        session_key = f"{resolved_agent_id}:{origin_session_id}"
+
+                    context["agent_id"] = resolved_agent_id
+                    if origin_session_id:
+                        context["origin_session_id"] = str(origin_session_id)
+                    if session_key:
+                        context["session_key"] = str(session_key)
+                        context["session_id"] = str(session_key)
+
+                    # Keep kwargs synchronized because AgentBridge reads both.
+                    try:
+                        if hasattr(context, "kwargs") and isinstance(context.kwargs, dict):
+                            context.kwargs["agent_id"] = resolved_agent_id
+                            if origin_session_id:
+                                context.kwargs["origin_session_id"] = str(origin_session_id)
+                            if session_key:
+                                context.kwargs["session_key"] = str(session_key)
+                                context.kwargs["session_id"] = str(session_key)
+                    except Exception:
+                        pass
+
                 # Read on_event callback injected by the channel (e.g. web SSE)
                 on_event = context.get("on_event") if context else None
 

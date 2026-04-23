@@ -203,7 +203,17 @@ class ChatChannel(Channel):
         if ":" in raw_session_id:
             session_prefix = raw_session_id.split(":", 1)[0].strip()
             if session_prefix:
-                return session_prefix
+                known_agents = {default_agent_id}
+                agents_cfg = conf().get("agents", []) or []
+                if isinstance(agents_cfg, list):
+                    for item in agents_cfg:
+                        if not isinstance(item, dict):
+                            continue
+                        item_id = str(item.get("id", "") or "").strip()
+                        if item_id:
+                            known_agents.add(item_id)
+                if session_prefix in known_agents:
+                    return session_prefix
 
         bindings = conf().get("channel_agent_bindings", {}) or {}
         channel_type = str(context.get("channel_type", "") or "").strip()

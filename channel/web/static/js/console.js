@@ -59,6 +59,7 @@ const I18N = {
         skills_section_title: '技能', skill_enable: '启用', skill_disable: '禁用',
         skill_toggle_error: '操作失败，请稍后再试',
         memory_title: '记忆管理', memory_desc: '查看 Agent 记忆文件和内容',
+        memory_agent_label: 'Agent',
         memory_tab_files: '记忆文件', memory_tab_dreams: '梦境日记',
         memory_loading: '加载记忆文件中...', memory_loading_desc: '记忆文件将显示在此处',
         memory_back: '返回列表',
@@ -174,6 +175,7 @@ const I18N = {
         skills_section_title: 'Skills', skill_enable: 'Enable', skill_disable: 'Disable',
         skill_toggle_error: 'Operation failed, please try again',
         memory_title: 'Memory', memory_desc: 'View agent memory files and contents',
+        memory_agent_label: 'Agent',
         memory_tab_files: 'Memory Files', memory_tab_dreams: 'Dream Diary',
         memory_loading: 'Loading memory files...', memory_loading_desc: 'Memory files will be displayed here',
         memory_back: 'Back to list',
@@ -3677,6 +3679,43 @@ function toggleSkill(name, currentlyEnabled) {
 let memoryPage = 1;
 let memoryCategory = 'memory';   // 'memory' | 'dream'
 const memoryPageSize = 10;
+let memorySelectedAgentId = '';
+
+function _getMemoryAgentOptions() {
+    const source = appConfig || {};
+    return _buildAgentOptions(source).map(item => ({ value: item.value, label: item.label }));
+}
+
+function _ensureMemoryAgentId() {
+    const options = _getMemoryAgentOptions();
+    if (!options.length) {
+        memorySelectedAgentId = _getDefaultAgentId();
+        return memorySelectedAgentId;
+    }
+    if (!memorySelectedAgentId) {
+        memorySelectedAgentId = _normalizeAgentId(selectedAgentId || _parseAgentIdFromSessionId(sessionId) || _getDefaultAgentId());
+    }
+    if (!options.some(opt => opt.value === memorySelectedAgentId)) {
+        memorySelectedAgentId = options[0].value;
+    }
+    return memorySelectedAgentId;
+}
+
+function initMemoryAgentSelector() {
+    const selectEl = document.getElementById('memory-agent-select');
+    if (!selectEl) return;
+    const options = _getMemoryAgentOptions();
+    if (!options.length) return;
+    const current = _ensureMemoryAgentId();
+    initDropdown(selectEl, options, current, onMemoryAgentSelectChange);
+}
+
+function onMemoryAgentSelectChange(agentId) {
+    memorySelectedAgentId = _normalizeAgentId(agentId || _getDefaultAgentId());
+    document.getElementById('memory-panel-viewer').classList.add('hidden');
+    document.getElementById('memory-panel-list').classList.remove('hidden');
+    loadMemoryView(1);
+}
 
 function switchMemoryTab(tab) {
     document.querySelectorAll('.memory-tab').forEach(el => el.classList.remove('active'));
@@ -3688,7 +3727,8 @@ function switchMemoryTab(tab) {
 function loadMemoryView(page) {
     page = page || 1;
     memoryPage = page;
-    fetch(`/api/memory?page=${page}&page_size=${memoryPageSize}&category=${memoryCategory}`).then(r => r.json()).then(data => {
+    const agentId = encodeURIComponent(_ensureMemoryAgentId());
+    fetch(`/api/memory?page=${page}&page_size=${memoryPageSize}&category=${memoryCategory}&agent_id=${agentId}`).then(r => r.json()).then(data => {
         if (data.status !== 'success') return;
         const emptyEl = document.getElementById('memory-empty');
         const listEl = document.getElementById('memory-list');
@@ -3749,7 +3789,8 @@ function loadMemoryView(page) {
 
 function openMemoryFile(filename, category) {
     category = category || 'memory';
-    fetch(`/api/memory/content?filename=${encodeURIComponent(filename)}&category=${category}`).then(r => r.json()).then(data => {
+    const agentId = encodeURIComponent(_ensureMemoryAgentId());
+    fetch(`/api/memory/content?filename=${encodeURIComponent(filename)}&category=${category}&agent_id=${agentId}`).then(r => r.json()).then(data => {
         if (data.status !== 'success') return;
         document.getElementById('memory-panel-list').classList.add('hidden');
         const panel = document.getElementById('memory-panel-viewer');
@@ -4697,6 +4738,7 @@ navigateTo = function(viewId) {
     else if (viewId === 'memory') {
         document.getElementById('memory-panel-viewer').classList.add('hidden');
         document.getElementById('memory-panel-list').classList.remove('hidden');
+        initMemoryAgentSelector();
         switchMemoryTab('files');
     }
     else if (viewId === 'knowledge') loadKnowledgeView();

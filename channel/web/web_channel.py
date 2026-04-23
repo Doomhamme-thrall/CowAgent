@@ -1900,6 +1900,32 @@ def _ensure_agent_workspace(workspace: str):
         ensure_workspace(workspace, create_templates=True)
 
 
+def _resolve_agent_workspace(agent_id: str = "") -> str:
+    local_config = conf()
+    catalog = _build_agent_catalog(local_config)
+    default_agent_id = catalog.get("default_agent_id") or _normalize_agent_id(local_config.get("default_agent_id", "main"))
+    target_agent_id = _normalize_agent_id(agent_id, default_agent_id)
+
+    if target_agent_id == default_agent_id:
+        default_workspace = catalog.get("default_agent", {}).get("workspace")
+        if default_workspace:
+            return expand_path(default_workspace)
+
+    for item in catalog.get("agents", []) or []:
+        if not isinstance(item, dict):
+            continue
+        if _normalize_agent_id(item.get("id"), "") != target_agent_id:
+            continue
+        workspace = item.get("workspace")
+        if workspace:
+            return expand_path(workspace)
+
+    base_workspace = expand_path(local_config.get("agent_workspace", "~/cow"))
+    if target_agent_id == default_agent_id:
+        return base_workspace
+    return os.path.join(base_workspace, "agents", target_agent_id)
+
+
 class ToolsHandler:
     def GET(self):
         _require_auth()
@@ -1973,14 +1999,14 @@ class MemoryHandler:
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             from agent.memory.service import MemoryService
-            params = web.input(page='1', page_size='20', category='memory')
-            workspace_root = _get_workspace_root()
+            params = web.input(page='1', page_size='20', category='memory', agent_id='')
+            workspace_root = _resolve_agent_workspace(params.agent_id)
             service = MemoryService(workspace_root)
             result = service.list_files(
                 page=int(params.page), page_size=int(params.page_size),
                 category=params.category,
             )
-            return json.dumps({"status": "success", **result}, ensure_ascii=False)
+            return json.dumps({"status": "success", "agent_id": _normalize_agent_id(params.agent_id, _normalize_agent_id(conf().get("default_agent_id", "main"))), **result}, ensure_ascii=False)
         except Exception as e:
             logger.error(f"[WebChannel] Memory API error: {e}")
             return json.dumps({"status": "error", "message": str(e)})
@@ -1992,13 +2018,13 @@ class MemoryContentHandler:
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             from agent.memory.service import MemoryService
-            params = web.input(filename='', category='memory')
+            params = web.input(filename='', category='memory', agent_id='')
             if not params.filename:
                 return json.dumps({"status": "error", "message": "filename required"})
-            workspace_root = _get_workspace_root()
+            workspace_root = _resolve_agent_workspace(params.agent_id)
             service = MemoryService(workspace_root)
             result = service.get_content(params.filename, category=params.category)
-            return json.dumps({"status": "success", **result}, ensure_ascii=False)
+            return json.dumps({"status": "success", "agent_id": _normalize_agent_id(params.agent_id, _normalize_agent_id(conf().get("default_agent_id", "main"))), **result}, ensure_ascii=False)
         except ValueError:
             return json.dumps({"status": "error", "message": "invalid filename"})
         except FileNotFoundError:
