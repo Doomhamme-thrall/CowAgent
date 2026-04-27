@@ -149,6 +149,17 @@ class AgentLLMModel(LLMModel):
                 return btype
         return const.OPENAI
 
+    @staticmethod
+    def _mask_api_base(api_base: str) -> str:
+        if not api_base:
+            return ""
+        base = str(api_base).strip()
+        if not base:
+            return ""
+        if "://" in base:
+            base = base.split("://", 1)[1]
+        return base.split("/", 1)[0]
+
     @property
     def bot(self):
         """Lazy load the bot, re-create when model or bot_type changes"""
@@ -215,6 +226,16 @@ class AgentLLMModel(LLMModel):
                     if override.get("api_base"):
                         kwargs['api_base_override'] = override["api_base"]
 
+                logger.info(
+                    "[AgentLLMModel] call route: "
+                    f"channel_type={channel_type or 'unknown'}, session_id={session_id or ''}, "
+                    f"model={kwargs.get('model', '')}, bot_type={self._resolve_bot_type(self.model)}, "
+                    f"override_profile={override.get('profile_id', '') if override else ''}, "
+                    f"override_key={override.get('profile_key', '') if override else ''}, "
+                    f"override_provider={override.get('provider', '') if override else ''}, "
+                    f"override_api_base={self._mask_api_base(override.get('api_base', '')) if override else ''}"
+                )
+
                 response = self.bot.call_with_tools(**kwargs)
                 return self._format_response(response)
             else:
@@ -275,6 +296,16 @@ class AgentLLMModel(LLMModel):
                         kwargs['api_key_override'] = override["api_key"]
                     if override.get("api_base"):
                         kwargs['api_base_override'] = override["api_base"]
+
+                logger.info(
+                    "[AgentLLMModel] call_stream route: "
+                    f"channel_type={channel_type or 'unknown'}, session_id={session_id or ''}, "
+                    f"model={kwargs.get('model', '')}, bot_type={self._resolve_bot_type(self.model)}, "
+                    f"override_profile={override.get('profile_id', '') if override else ''}, "
+                    f"override_key={override.get('profile_key', '') if override else ''}, "
+                    f"override_provider={override.get('provider', '') if override else ''}, "
+                    f"override_api_base={self._mask_api_base(override.get('api_base', '')) if override else ''}"
+                )
 
                 stream = self.bot.call_with_tools(**kwargs)
                 

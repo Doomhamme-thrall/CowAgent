@@ -132,6 +132,65 @@ class Channel(object):
                     except Exception:
                         pass
 
+                    # Apply channel/task default model profile when caller did
+                    # not provide explicit model_override (e.g. QQ default model).
+                    if not context.get("model_override"):
+                        profile_key = ""
+                        if bool(context.get("is_scheduled_task", False)):
+                            profile_key = "default_model_task"
+                        else:
+                            ct = str(context.get("channel_type", "") or self.channel_type or "").strip().lower()
+                            if ct == "web":
+                                profile_key = "default_model_web"
+                            elif ct == "qq":
+                                profile_key = "default_model_qq"
+
+                        if profile_key:
+                            profile_id = str(conf().get(profile_key, "") or "").strip()
+                            if profile_id:
+                                custom_models = conf().get("custom_models", []) or []
+                                if isinstance(custom_models, list):
+                                    profile = next((m for m in custom_models if isinstance(m, dict) and m.get("id") == profile_id), None)
+                                    if profile:
+                                        model_override = {
+                                            "model": profile.get("model") or "",
+                                            "api_key": profile.get("api_key") or "",
+                                            "api_base": profile.get("api_base") or "",
+                                            "provider": profile.get("provider") or "custom",
+                                            "profile_id": profile_id,
+                                            "profile_key": profile_key,
+                                        }
+                                        context["model_override"] = model_override
+                                        try:
+                                            if hasattr(context, "kwargs") and isinstance(context.kwargs, dict):
+                                                context.kwargs["model_override"] = model_override
+                                        except Exception:
+                                            pass
+                                        logger.info(
+                                            f"[Channel] Applied {profile_key} profile '{profile_id}' for channel_type="
+                                            f"{context.get('channel_type', '')}, model={model_override.get('model', '')}, "
+                                            f"provider={model_override.get('provider', '')}, agent_id={resolved_agent_id}, "
+                                            f"session_key={context.get('session_key', '')}"
+                                        )
+                                    else:
+                                        logger.warning(
+                                            f"[Channel] {profile_key} points to missing profile_id='{profile_id}' "
+                                            f"for channel_type={context.get('channel_type', '')}, agent_id={resolved_agent_id}"
+                                        )
+                            elif profile_key:
+                                logger.info(
+                                    f"[Channel] {profile_key} is empty for channel_type={context.get('channel_type', '')}, "
+                                    f"agent_id={resolved_agent_id}; using main model={conf().get('model', '')}"
+                                )
+                    else:
+                        existing_override = context.get("model_override") or {}
+                        logger.info(
+                            f"[Channel] Using explicit model_override for channel_type={context.get('channel_type', '')}, "
+                            f"agent_id={resolved_agent_id}, model={existing_override.get('model', '')}, "
+                            f"provider={existing_override.get('provider', '')}, "
+                            f"profile_id={existing_override.get('profile_id', '')}"
+                        )
+
                 # Read on_event callback injected by the channel (e.g. web SSE)
                 on_event = context.get("on_event") if context else None
 
