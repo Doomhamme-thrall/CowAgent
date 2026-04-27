@@ -9,7 +9,6 @@ import time
 from typing import Optional, List
 
 from agent.protocol import Agent
-from agent.tools import ToolManager
 from common.log import logger
 from common.utils import expand_path
 
@@ -416,8 +415,19 @@ class AgentInitializer:
     
     def _load_tools(self, workspace_root: str, memory_manager, memory_tools: List, session_id: Optional[str] = None):
         """Load all tools"""
-        tool_manager = ToolManager()
-        tool_manager.load_tools()
+        tool_manager = None
+        try:
+            from agent.tools import ToolManager
+            tool_manager = ToolManager()
+            tool_manager.load_tools()
+        except Exception as e:
+            logger.error(
+                f"[AgentInitializer] Built-in tools unavailable, continue with fallback tools only: {e}",
+                exc_info=True,
+            )
+            # Continue with memory-only tools so agent mode can still reply and
+            # preserve model routing (instead of falling back to normal mode).
+            tool_manager = None
         
         tools = []
         file_config = {
@@ -425,32 +435,33 @@ class AgentInitializer:
             "memory_manager": memory_manager
         } if memory_manager else {"cwd": workspace_root}
         
-        for tool_name in tool_manager.tool_classes.keys():
-            try:
-                # Skip web_search if no API key is available
-                if tool_name == "web_search":
-                    from agent.tools.web_search.web_search import WebSearch
-                    if not WebSearch.is_available():
-                        logger.debug("[AgentInitializer] WebSearch skipped - no BOCHA_API_KEY or LINKAI_API_KEY")
-                        continue
+        if tool_manager:
+            for tool_name in tool_manager.tool_classes.keys():
+                try:
+                    # Skip web_search if no API key is available
+                    if tool_name == "web_search":
+                        from agent.tools.web_search.web_search import WebSearch
+                        if not WebSearch.is_available():
+                            logger.debug("[AgentInitializer] WebSearch skipped - no BOCHA_API_KEY or LINKAI_API_KEY")
+                            continue
 
-                # Special handling for EnvConfig tool
-                if tool_name == "env_config":
-                    from agent.tools import EnvConfig
-                    tool = EnvConfig({"agent_bridge": self.agent_bridge})
-                else:
-                    tool = tool_manager.create_tool(tool_name)
+                    # Special handling for EnvConfig tool
+                    if tool_name == "env_config":
+                        from agent.tools import EnvConfig
+                        tool = EnvConfig({"agent_bridge": self.agent_bridge})
+                    else:
+                        tool = tool_manager.create_tool(tool_name)
 
-                if tool:
-                    # Apply workspace config to file operation tools
-                    if tool_name in ['read', 'write', 'edit', 'bash', 'grep', 'find', 'ls', 'web_fetch', 'send', 'browser']:
-                        tool.config = file_config
-                        tool.cwd = file_config.get("cwd", getattr(tool, 'cwd', None))
-                        if 'memory_manager' in file_config:
-                            tool.memory_manager = file_config['memory_manager']
-                    tools.append(tool)
-            except Exception as e:
-                logger.warning(f"[AgentInitializer] Failed to load tool {tool_name}: {e}")
+                    if tool:
+                        # Apply workspace config to file operation tools
+                        if tool_name in ['read', 'write', 'edit', 'bash', 'grep', 'find', 'ls', 'web_fetch', 'send', 'browser']:
+                            tool.config = file_config
+                            tool.cwd = file_config.get("cwd", getattr(tool, 'cwd', None))
+                            if 'memory_manager' in file_config:
+                                tool.memory_manager = file_config['memory_manager']
+                        tools.append(tool)
+                except Exception as e:
+                    logger.warning(f"[AgentInitializer] Failed to load tool {tool_name}: {e}")
         
         # Add memory tools
         if memory_tools:

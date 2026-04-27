@@ -202,7 +202,19 @@ class Channel(object):
                     clear_history=False
                 )
             except Exception as e:
-                logger.error(f"[Channel] Agent mode failed, fallback to normal mode: {e}")
+                override = (context.get("model_override") if context else None) or {}
+                logger.error(
+                    "[Channel] Agent mode failed, fallback to normal mode: "
+                    f"error={e}, channel_type={context.get('channel_type', '') if context else ''}, "
+                    f"agent_id={context.get('agent_id', '') if context else ''}, "
+                    f"session_key={context.get('session_key', '') if context else ''}, "
+                    f"override_model={override.get('model', '')}, "
+                    f"override_provider={override.get('provider', '')}, "
+                    f"override_profile={override.get('profile_id', '')}, "
+                    f"override_key={override.get('profile_key', '')}, "
+                    f"fallback_main_model={conf().get('model', '')}",
+                    exc_info=True,
+                )
                 # Fallback to normal mode if agent fails
                 return Bridge().fetch_reply_content(query, context)
         else:

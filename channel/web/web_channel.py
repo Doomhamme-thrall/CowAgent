@@ -1947,7 +1947,7 @@ class ToolsHandler:
                     tools.append({"name": name, "description": ""})
             return json.dumps({"status": "success", "tools": tools}, ensure_ascii=False)
         except Exception as e:
-            logger.error(f"[WebChannel] Tools API error: {e}")
+            logger.error(f"[WebChannel] Tools API error: {e}", exc_info=True)
             return json.dumps({"status": "error", "message": str(e)})
 
 
