@@ -1,105 +1,78 @@
-# Import base tool
+"""Tools module for Agent.
+
+This package exposes the built-in tools used by the agent runtime while
+keeping optional dependencies isolated so a missing extra does not break
+the whole package import.
+"""
+
+from common.log import logger
+
 from agent.tools.base_tool import BaseTool
 from agent.tools.tool_manager import ToolManager
-
-# Import file operation tools
 from agent.tools.read.read import Read
 from agent.tools.write.write import Write
 from agent.tools.edit.edit import Edit
 from agent.tools.bash.bash import Bash
 from agent.tools.ls.ls import Ls
 from agent.tools.send.send import Send
-
-# Import memory tools
 from agent.tools.memory.memory_search import MemorySearchTool
 from agent.tools.memory.memory_get import MemoryGetTool
 
-# Import tools with optional dependencies
-def _import_optional_tools():
-    """Import tools that have optional dependencies"""
-    from common.log import logger
-    tools = {}
-    
-    # EnvConfig Tool (requires python-dotenv)
+
+def _safe_import(name: str, import_fn, missing_message: str, log_level: str = "error"):
     try:
-        from agent.tools.env_config.env_config import EnvConfig
-        tools['EnvConfig'] = EnvConfig
+        return import_fn()
     except ImportError as e:
-        logger.error(
-            f"[Tools] EnvConfig tool not loaded - missing dependency: {e}\n"
-            f"  To enable environment variable management, run:\n"
-            f"    pip install python-dotenv>=1.0.0"
-        )
+        message = f"[Tools] {name} not loaded - missing dependency: {e}\n{missing_message}"
+        if log_level == "info":
+            logger.info(message)
+        elif log_level == "warning":
+            logger.warning(message)
+        else:
+            logger.error(message)
     except Exception as e:
-        logger.error(f"[Tools] EnvConfig tool failed to load: {e}")
-    
-    # Scheduler Tool (requires croniter)
-    try:
-        from agent.tools.scheduler.scheduler_tool import SchedulerTool
-        tools['SchedulerTool'] = SchedulerTool
-    except ImportError as e:
-        logger.error(
-            f"[Tools] Scheduler tool not loaded - missing dependency: {e}\n"
-            f"  To enable scheduled tasks, run:\n"
-            f"    pip install croniter>=2.0.0"
-        )
-    except Exception as e:
-        logger.error(f"[Tools] Scheduler tool failed to load: {e}")
-
-    # WebSearch Tool (conditionally loaded based on API key availability at init time)
-    try:
-        from agent.tools.web_search.web_search import WebSearch
-        tools['WebSearch'] = WebSearch
-    except ImportError as e:
-        logger.error(f"[Tools] WebSearch not loaded - missing dependency: {e}")
-    except Exception as e:
-        logger.error(f"[Tools] WebSearch failed to load: {e}")
-
-    # WebFetch Tool
-    try:
-        from agent.tools.web_fetch.web_fetch import WebFetch
-        tools['WebFetch'] = WebFetch
-    except ImportError as e:
-        logger.error(f"[Tools] WebFetch not loaded - missing dependency: {e}")
-    except Exception as e:
-        logger.error(f"[Tools] WebFetch failed to load: {e}")
-
-    # Vision Tool (conditionally loaded based on API key availability)
-    try:
-        from agent.tools.vision.vision import Vision
-        tools['Vision'] = Vision
-    except ImportError as e:
-        logger.error(f"[Tools] Vision not loaded - missing dependency: {e}")
-    except Exception as e:
-        logger.error(f"[Tools] Vision failed to load: {e}")
-
-    # ImageGenerate Tool
-    try:
-        from agent.tools.image_generate.image_generate import ImageGenerate
-        tools['ImageGenerate'] = ImageGenerate
-    except ImportError as e:
-        logger.error(f"[Tools] ImageGenerate not loaded - missing dependency: {e}")
-    except Exception as e:
-        logger.error(f"[Tools] ImageGenerate failed to load: {e}")
-
-    return tools
-
-# Load optional tools
-_optional_tools = _import_optional_tools()
-EnvConfig = _optional_tools.get('EnvConfig')
-SchedulerTool = _optional_tools.get('SchedulerTool')
-WebSearch = _optional_tools.get('WebSearch')
-WebFetch = _optional_tools.get('WebFetch')
-Vision = _optional_tools.get('Vision')
-ImageGenerate = _optional_tools.get('ImageGenerate')
-GoogleSearch = _optional_tools.get('GoogleSearch')
-FileSave = _optional_tools.get('FileSave')
-Terminal = _optional_tools.get('Terminal')
+        logger.error(f"[Tools] {name} failed to load: {e}", exc_info=True)
+    return None
 
 
-# BrowserTool (requires playwright)
+EnvConfig = _safe_import(
+    "EnvConfig",
+    lambda: __import__("agent.tools.env_config.env_config", fromlist=["EnvConfig"]).EnvConfig,
+    "  To enable environment variable management, run:\n    pip install python-dotenv>=1.0.0",
+)
+
+SchedulerTool = _safe_import(
+    "SchedulerTool",
+    lambda: __import__("agent.tools.scheduler.scheduler_tool", fromlist=["SchedulerTool"]).SchedulerTool,
+    "  To enable scheduled tasks, run:\n    pip install croniter>=2.0.0",
+)
+
+WebSearch = _safe_import(
+    "WebSearch",
+    lambda: __import__("agent.tools.web_search.web_search", fromlist=["WebSearch"]).WebSearch,
+    "",
+)
+
+WebFetch = _safe_import(
+    "WebFetch",
+    lambda: __import__("agent.tools.web_fetch.web_fetch", fromlist=["WebFetch"]).WebFetch,
+    "",
+)
+
+Vision = _safe_import(
+    "Vision",
+    lambda: __import__("agent.tools.vision.vision", fromlist=["Vision"]).Vision,
+    "",
+)
+
+ImageGenerate = _safe_import(
+    "ImageGenerate",
+    lambda: __import__("agent.tools.image_generate.image_generate", fromlist=["ImageGenerate"]).ImageGenerate,
+    "",
+)
+
+
 def _import_browser_tool():
-    from common.log import logger
     try:
         from agent.tools.browser.browser_tool import BrowserTool
         return BrowserTool
@@ -110,34 +83,36 @@ def _import_browser_tool():
             f"    pip install playwright\n"
             f"    playwright install chromium"
         )
-        return None
     except Exception as e:
-        logger.error(f"[Tools] BrowserTool failed to load: {e}")
-        return None
+        logger.error(f"[Tools] BrowserTool failed to load: {e}", exc_info=True)
+    return None
+
 
 BrowserTool = _import_browser_tool()
 
-# Export all tools (including optional ones that might be None)
-__all__ = [
-    'BaseTool',
-    'ToolManager',
-    'Read',
-    'Write',
-    'Edit',
-    'Bash',
-    'Ls',
-    'Send',
-    'MemorySearchTool',
-    'MemoryGetTool',
-    'EnvConfig',
-    'SchedulerTool',
-    'WebSearch',
-    'WebFetch',
-    'Vision',
-    'ImageGenerate',
-    'BrowserTool',
-]
+GoogleSearch = None
+FileSave = None
+Terminal = None
 
-"""
-Tools module for Agent.
-"""
+__all__ = [
+    "BaseTool",
+    "ToolManager",
+    "Read",
+    "Write",
+    "Edit",
+    "Bash",
+    "Ls",
+    "Send",
+    "MemorySearchTool",
+    "MemoryGetTool",
+    "EnvConfig",
+    "SchedulerTool",
+    "WebSearch",
+    "WebFetch",
+    "Vision",
+    "ImageGenerate",
+    "BrowserTool",
+    "GoogleSearch",
+    "FileSave",
+    "Terminal",
+]
