@@ -601,7 +601,7 @@ class AgentBridge:
             return Reply(ReplyType.TEXT, response)
             
         except Exception as e:
-            logger.error(f"Agent reply error: {e}")
+            logger.error(f"Agent reply error: {e}", exc_info=True)
             # If the agent cleared its messages due to format error / overflow,
             # also purge the DB so the next request starts clean.
             if session_key and agent:
