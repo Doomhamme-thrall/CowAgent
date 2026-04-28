@@ -344,6 +344,35 @@
     display: none;
 }
 @media (max-width: 768px) {
+    .chat-input-row {
+        flex-wrap: wrap;
+        align-items: stretch;
+    }
+
+    .chat-input-actions {
+        width: 100%;
+        flex: 0 0 100%;
+        justify-content: flex-start;
+        gap: 6px;
+        overflow-x: auto;
+        padding-bottom: 2px;
+    }
+
+    .chat-input-actions::-webkit-scrollbar {
+        display: none;
+    }
+
+    .chat-input-field {
+        width: auto;
+        flex: 1 1 auto;
+        order: 2;
+        min-width: 0;
+    }
+
+    .chat-send-btn {
+        order: 3;
+    }
+
     .session-panel-overlay {
         display: block;
         position: fixed;
@@ -720,7 +749,10 @@
 }
 
 /* Ensure the input row can shrink properly and doesn't force narrow textarea on small screens */
-.max-w-3xl .flex.items-center.relative { min-width: 0; }
+.chat-input-row { min-width: 0; }
+.chat-input-actions { min-width: 0; }
+.chat-input-field { min-width: 0; }
+.chat-send-btn { flex-shrink: 0; }
 
 /* Collapsed selector styles: show icon-only buttons to save horizontal space */
 #agent-selector.selector-collapsed .cfg-dropdown-selected { width: 40px; height: 40px; padding: 0; display: flex; align-items: center; justify-content: center; }
@@ -737,12 +769,41 @@
     min-width: 40px; min-height: 40px; border-radius: 8px;
 }
 
+/* Overlay backdrop used when collapsed selectors open on small screens */
+.selector-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 85;
+    background: rgba(15, 23, 42, 0.18);
+    backdrop-filter: blur(1px);
+}
+.selector-overlay.hidden { display: none; }
+
+/* Expanded selector menus become viewport overlays instead of inline popovers */
+#agent-selector.selector-collapsed .cfg-dropdown-menu,
+#model-selector-wrap.selector-collapsed #model-selector-menu {
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    top: auto;
+    bottom: 76px;
+    width: auto !important;
+    max-height: min(50vh, 320px);
+    z-index: 90;
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.18);
+}
+
+#model-selector-wrap.selector-collapsed #model-selector-menu {
+    max-width: calc(100vw - 24px);
+}
+
 /* Message content wrapping improvements */
 .msg-content { white-space: pre-wrap; word-break: break-word; overflow-wrap: break-word; }
 .user-bubble.msg-content { word-break: break-word; }
 
 /* Inline edit textarea safety: box-sizing and max width inside bubble */
-.edit-textarea { box-sizing: border-box; max-width: 100%; width: 100%; }
+.edit-form-wrap { min-width: 0; width: 100%; }
+.edit-textarea { box-sizing: border-box; max-width: 100%; width: 100%; min-width: 0; white-space: pre-wrap; overflow-wrap: break-word; }
 
 /* Attachment Preview Bar */
 .attachment-preview {
