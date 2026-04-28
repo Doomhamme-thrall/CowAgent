@@ -2118,6 +2118,7 @@ function startEditMessage(userEl) {
     const bubble = userEl.querySelector('.user-bubble');
     if (!bubble) return;
     bubble.dataset.savedHtml = bubble.innerHTML;
+    bubble.classList.add('editing');
     bubble.innerHTML = `
         <div class="edit-form-wrap">
             <textarea class="edit-textarea" rows="3">${escapeHtml(msgText)}</textarea>
@@ -2154,6 +2155,7 @@ function cancelEdit(btn) {
     if (bubble && bubble.dataset.savedHtml !== undefined) {
         bubble.innerHTML = bubble.dataset.savedHtml;
         delete bubble.dataset.savedHtml;
+        bubble.classList.remove('editing');
     }
     delete userEl.dataset.editing;
     userEl.classList.remove('editing');
@@ -2176,6 +2178,8 @@ async function submitEdit(btn) {
     // Remove inline edit state
     delete userEl.dataset.editing;
     userEl.classList.remove('editing');
+    const bubble = userEl.querySelector('.user-bubble');
+    if (bubble) bubble.classList.remove('editing');
 
     // Remove user element and everything that follows (bot reply, subsequent turns)
     _removeFromElement(userEl);
