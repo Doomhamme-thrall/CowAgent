@@ -373,6 +373,8 @@ window.addEventListener('resize', () => {
             closeSidebar();
         }
     }
+    // Adjust selector collapse state on resize to avoid squeezing input
+    if (typeof updateSelectorsMode === 'function') updateSelectorsMode();
 });
 
 // =====================================================================
@@ -581,7 +583,9 @@ function _updateAgentSelectorLabel() {
 
 function initAgentSelector(data) {
     availableAgents = _buildAgentOptions(data || appConfig);
-    const options = availableAgents.map(item => ({ value: item.value, label: item.label }));
+        const options = availableAgents.map(item => ({ value: item.value, label: item.label }));
+        // Ensure selectors are in correct (possibly collapsed) state after init
+        if (typeof updateSelectorsMode === 'function') updateSelectorsMode();
     const selector = document.getElementById('agent-selector');
     if (!selector || options.length === 0) return;
 
@@ -678,6 +682,29 @@ function updateModelSelectorLabel() {
     } else {
         label.textContent = selectedModelProfile.name;
     }
+}
+
+/* Measure available space and collapse selectors to icon-only on small widths.
+   Called on init and on window resize to avoid input being squeezed to 1 char. */
+function updateSelectorsMode() {
+    try {
+        const row = chatInput ? chatInput.closest('.flex.items-center') : null;
+        if (!row) return;
+        const width = row.getBoundingClientRect().width;
+        // Threshold: when the input row is narrow (e.g., mobile), collapse selectors.
+        const shouldCollapse = width < 520; // adjust threshold if needed
+
+        const agent = document.getElementById('agent-selector');
+        const modelWrap = document.getElementById('model-selector-wrap');
+
+        if (shouldCollapse) {
+            if (agent) agent.classList.add('selector-collapsed');
+            if (modelWrap) modelWrap.classList.add('selector-collapsed');
+        } else {
+            if (agent) agent.classList.remove('selector-collapsed');
+            if (modelWrap) modelWrap.classList.remove('selector-collapsed');
+        }
+    } catch (e) { /* ignore measurement errors */ }
 }
 
 // Close model selector on outside click

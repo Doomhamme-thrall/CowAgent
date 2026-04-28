@@ -719,6 +719,31 @@
     transition: border-color 0.2s ease;
 }
 
+/* Ensure the input row can shrink properly and doesn't force narrow textarea on small screens */
+.max-w-3xl .flex.items-center.relative { min-width: 0; }
+
+/* Collapsed selector styles: show icon-only buttons to save horizontal space */
+#agent-selector.selector-collapsed .cfg-dropdown-selected { width: 40px; height: 40px; padding: 0; display: flex; align-items: center; justify-content: center; }
+#agent-selector.selector-collapsed .cfg-dropdown-text { display: none; }
+#agent-selector.selector-collapsed .cfg-dropdown-arrow { display: none; }
+#agent-selector.selector-collapsed .agent-selector-icon { display: block; font-size: 16px; color: inherit; }
+
+#model-selector-wrap.selector-collapsed #model-selector-btn { width: 40px; padding: 0; justify-content: center; }
+#model-selector-wrap.selector-collapsed #model-selector-btn #model-selector-label { display: none; }
+#model-selector-wrap.selector-collapsed #model-selector-btn .fa-chevron-down { display: none; }
+
+/* Make sure collapsed buttons still have touch-friendly size */
+#agent-selector.selector-collapsed .cfg-dropdown-selected, #model-selector-wrap.selector-collapsed #model-selector-btn {
+    min-width: 40px; min-height: 40px; border-radius: 8px;
+}
+
+/* Message content wrapping improvements */
+.msg-content { white-space: pre-wrap; word-break: break-word; overflow-wrap: break-word; }
+.user-bubble.msg-content { word-break: break-word; }
+
+/* Inline edit textarea safety: box-sizing and max width inside bubble */
+.edit-textarea { box-sizing: border-box; max-width: 100%; width: 100%; }
+
 /* Attachment Preview Bar */
 .attachment-preview {
     display: flex;
