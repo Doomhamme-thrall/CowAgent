@@ -583,9 +583,7 @@ function _updateAgentSelectorLabel() {
 
 function initAgentSelector(data) {
     availableAgents = _buildAgentOptions(data || appConfig);
-        const options = availableAgents.map(item => ({ value: item.value, label: item.label }));
-        // Ensure selectors are in correct (possibly collapsed) state after init
-        if (typeof updateSelectorsMode === 'function') updateSelectorsMode();
+    const options = availableAgents.map(item => ({ value: item.value, label: item.label }));
     const selector = document.getElementById('agent-selector');
     if (!selector || options.length === 0) return;
 
@@ -596,6 +594,7 @@ function initAgentSelector(data) {
     selectedAgentId = current;
     initDropdown(selector, options, current, onAgentSelectChange);
     _updateAgentSelectorLabel();
+    if (typeof updateSelectorsMode === 'function') updateSelectorsMode();
 }
 
 function onAgentSelectChange(agentId) {
@@ -632,10 +631,19 @@ function getModelOverride() {
 function toggleModelSelector(e) {
     e.stopPropagation();
     const menu = document.getElementById('model-selector-menu');
+    const button = document.getElementById('model-selector-btn');
+    if (button && button.parentElement && button.parentElement.classList.contains('selector-collapsed')) {
+        _positionCollapsedMenu(menu, button);
+        _showSelectorOverlay();
+    } else {
+        _clearCollapsedMenuPosition(menu);
+        _hideSelectorOverlay();
+    }
     menu.classList.toggle('hidden');
     if (!menu.classList.contains('hidden')) {
         buildModelSelectorMenu();
     }
+    _syncSelectorOverlay();
 }
 
 function buildModelSelectorMenu() {
@@ -672,6 +680,7 @@ function selectModelProfile(profile) {
     selectedModelProfile = profile;
     updateModelSelectorLabel();
     document.getElementById('model-selector-menu').classList.add('hidden');
+    _hideSelectorOverlay();
 }
 
 function updateModelSelectorLabel() {
@@ -681,6 +690,83 @@ function updateModelSelectorLabel() {
         label.textContent = t('model_selector_global');
     } else {
         label.textContent = selectedModelProfile.name;
+    }
+}
+
+let selectorOverlayEl = null;
+
+function _getSelectorOverlay() {
+    if (selectorOverlayEl) return selectorOverlayEl;
+    const overlay = document.createElement('div');
+    overlay.id = 'selector-overlay';
+    overlay.className = 'selector-overlay hidden';
+    overlay.addEventListener('click', () => {
+        closeAllSelectors();
+    });
+    document.body.appendChild(overlay);
+    selectorOverlayEl = overlay;
+    return overlay;
+}
+
+function _showSelectorOverlay() {
+    _getSelectorOverlay().classList.remove('hidden');
+}
+
+function _hideSelectorOverlay() {
+    if (selectorOverlayEl) selectorOverlayEl.classList.add('hidden');
+}
+
+function _isAnySelectorOpen() {
+    const agentOpen = !!document.querySelector('#agent-selector.open');
+    const modelMenu = document.getElementById('model-selector-menu');
+    return agentOpen || !!(modelMenu && !modelMenu.classList.contains('hidden'));
+}
+
+function closeAllSelectors() {
+    document.querySelectorAll('.cfg-dropdown.open').forEach(d => d.classList.remove('open'));
+    const menu = document.getElementById('model-selector-menu');
+    if (menu) {
+        menu.classList.add('hidden');
+        _clearCollapsedMenuPosition(menu);
+    }
+    _hideSelectorOverlay();
+}
+
+function _clearCollapsedMenuPosition(menuEl) {
+    if (!menuEl) return;
+    menuEl.style.position = '';
+    menuEl.style.left = '';
+    menuEl.style.right = '';
+    menuEl.style.top = '';
+    menuEl.style.bottom = '';
+    menuEl.style.width = '';
+    menuEl.style.maxWidth = '';
+    menuEl.style.maxHeight = '';
+    menuEl.style.zIndex = '';
+    menuEl.style.boxShadow = '';
+}
+
+function _positionCollapsedMenu(menuEl, anchorEl) {
+    if (!menuEl || !anchorEl) return;
+    const rect = anchorEl.getBoundingClientRect();
+    const bottomOffset = Math.max(68, Math.round(window.innerHeight - rect.top + 8));
+    menuEl.style.position = 'fixed';
+    menuEl.style.left = '12px';
+    menuEl.style.right = '12px';
+    menuEl.style.top = 'auto';
+    menuEl.style.bottom = bottomOffset + 'px';
+    menuEl.style.width = 'auto';
+    menuEl.style.maxWidth = 'calc(100vw - 24px)';
+    menuEl.style.maxHeight = Math.max(220, Math.min(Math.round(window.innerHeight * 0.5), 320)) + 'px';
+    menuEl.style.zIndex = '90';
+    menuEl.style.boxShadow = '0 18px 40px rgba(0, 0, 0, 0.18)';
+}
+
+function _syncSelectorOverlay() {
+    if (_isAnySelectorOpen() && document.querySelector('#agent-selector.selector-collapsed, #model-selector-wrap.selector-collapsed')) {
+        _showSelectorOverlay();
+    } else {
+        _hideSelectorOverlay();
     }
 }
 
@@ -703,7 +789,11 @@ function updateSelectorsMode() {
         } else {
             if (agent) agent.classList.remove('selector-collapsed');
             if (modelWrap) modelWrap.classList.remove('selector-collapsed');
+            _hideSelectorOverlay();
+            _clearCollapsedMenuPosition(document.getElementById('model-selector-menu'));
         }
+
+        _syncSelectorOverlay();
     } catch (e) { /* ignore measurement errors */ }
 }
 
@@ -712,7 +802,11 @@ document.addEventListener('click', (e) => {
     const wrap = document.getElementById('model-selector-wrap');
     if (wrap && !wrap.contains(e.target)) {
         const menu = document.getElementById('model-selector-menu');
-        if (menu) menu.classList.add('hidden');
+        if (menu) {
+            menu.classList.add('hidden');
+            _clearCollapsedMenuPosition(menu);
+        }
+        _hideSelectorOverlay();
     }
 });
 
@@ -1635,7 +1729,7 @@ function startPolling() {
 
 function createUserMessageEl(content, timestamp, attachments, slotId) {
     const el = document.createElement('div');
-    el.className = 'flex justify-end px-4 sm:px-6 py-3 msg-row';
+    el.className = 'flex justify-end px-4 sm:px-6 py-3 msg-row min-w-0';
     el.dataset.msgRole = 'user';
     if (slotId) el.dataset.slotId = slotId;
     el.dataset.msgText = content || '';
@@ -1654,13 +1748,13 @@ function createUserMessageEl(content, timestamp, attachments, slotId) {
 
     const textHtml = content ? renderMarkdown(content) : '';
     el.innerHTML = `
-        <div class="flex flex-col items-end gap-1">
+        <div class="flex flex-col items-end gap-1 min-w-0">
             <div class="msg-actions">
                 <button class="msg-action-btn" title="${t('edit_message')}" onclick="startEditMessage(this.closest('[data-msg-role=user]'))">
                     <i class="fas fa-pencil"></i>
                 </button>
             </div>
-            <div class="max-w-[75%] sm:max-w-[60%]">
+            <div class="w-fit max-w-[88%] sm:max-w-[66%] min-w-0">
                 <div class="bg-primary-400 text-white rounded-2xl px-4 py-2.5 text-sm leading-relaxed msg-content user-bubble">
                     ${attachHtml}${textHtml}
                 </div>
@@ -2816,14 +2910,22 @@ function initDropdown(el, options, selectedValue, onChange) {
         selEl.addEventListener('click', (e) => {
             e.stopPropagation();
             document.querySelectorAll('.cfg-dropdown.open').forEach(d => { if (d !== el) d.classList.remove('open'); });
+            if (el.classList.contains('selector-collapsed')) {
+                _positionCollapsedMenu(menuEl, selEl);
+                _showSelectorOverlay();
+            } else {
+                _clearCollapsedMenuPosition(menuEl);
+                _hideSelectorOverlay();
+            }
             el.classList.toggle('open');
+            _syncSelectorOverlay();
         });
         el._ddBound = true;
     }
 }
 
 document.addEventListener('click', () => {
-    document.querySelectorAll('.cfg-dropdown.open').forEach(d => d.classList.remove('open'));
+    closeAllSelectors();
 });
 
 function getDropdownValue(el) { return el._ddValue || ''; }
