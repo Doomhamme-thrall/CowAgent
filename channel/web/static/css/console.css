@@ -805,10 +805,17 @@
 }
 .user-bubble.msg-content {
     display: inline-block;
-    width: fit-content;
+    width: auto;
     max-width: 100%;
     text-align: left;
     word-break: break-word;
+}
+.user-bubble.msg-content p {
+    margin: 0;
+    line-height: 1.55;
+}
+.user-bubble.msg-content p + p {
+    margin-top: 0.4em;
 }
 .user-bubble.msg-content.editing {
     display: block;

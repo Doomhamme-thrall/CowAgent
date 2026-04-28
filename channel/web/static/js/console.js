@@ -1754,8 +1754,8 @@ function createUserMessageEl(content, timestamp, attachments, slotId) {
                     <i class="fas fa-pencil"></i>
                 </button>
             </div>
-            <div class="w-fit max-w-[88%] sm:max-w-[66%] min-w-0">
-                <div class="bg-primary-400 text-white rounded-2xl px-4 py-2.5 text-sm leading-relaxed msg-content user-bubble">
+            <div class="max-w-[84%] sm:max-w-[64%] min-w-0">
+                <div class="inline-block w-auto max-w-full bg-primary-400 text-white rounded-2xl px-4 py-2.5 text-sm leading-relaxed msg-content user-bubble">
                     ${attachHtml}${textHtml}
                 </div>
                 <div class="text-xs text-slate-400 dark:text-slate-500 mt-1.5 text-right">${formatTime(timestamp)}</div>
