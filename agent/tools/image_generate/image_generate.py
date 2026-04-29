@@ -26,8 +26,11 @@ class ImageGenerate(BaseTool):
 
     name: str = "image_generate"
     description: str = (
-        "Generate an image from text prompt (text-to-image). "
-        "Uses the configured image-generation model profile when set."
+        "Generate images from a text prompt, or edit an input image with a prompt. "
+        "Use text-to-image when only `prompt` is provided. Use image-to-image when `image` is also provided. "
+        "The `image` input can be a URL, a local file path, or a data URL in the format "
+        "data:image/<type>;base64,<base64_data>. The output will be saved to the path in `output_path` "
+        "when provided, otherwise it is stored under the workspace tmp/output directory with an auto-generated name."
     )
 
     params: dict = {
@@ -35,7 +38,7 @@ class ImageGenerate(BaseTool):
         "properties": {
             "prompt": {
                 "type": "string",
-                "description": "Text prompt describing the image to generate",
+                "description": "Text prompt describing the image to generate or how to edit the input image",
             },
             "size": {
                 "type": "string",
@@ -45,13 +48,25 @@ class ImageGenerate(BaseTool):
                 "type": "string",
                 "description": "Optional response format: url or b64_json (default: url)",
             },
+            "image": {
+                "type": "string",
+                "description": "Optional input image for image-to-image. Supports URL, local file path, or data URL (data:image/<type>;base64,<base64_data>)",
+            },
+            "output_format": {
+                "type": "string",
+                "description": "Optional output image format for image-to-image, such as png or jpeg (default: png)",
+            },
+            "watermark": {
+                "type": "boolean",
+                "description": "Whether to add a watermark in image-to-image mode (default: false)",
+            },
             "output_path": {
                 "type": "string",
-                "description": "Optional output file path (relative or absolute). If provided, the generated image will be saved to this path. If omitted, it will be saved to workspace output directory.",
+                "description": "Optional output file path, relative to the agent workspace or absolute. If omitted, the image is saved under workspace tmp/output with an auto-generated name.",
             },
             "save_local": {
                 "type": "boolean",
-                "description": "Whether to save generated image to local workspace and auto-send (default: true)",
+                "description": "Whether to save the generated image locally and return a file_to_send payload (default: true)",
             },
         },
         "required": ["prompt"],
@@ -70,12 +85,21 @@ class ImageGenerate(BaseTool):
         response_format = (args.get("response_format") or "url").strip().lower()
         if response_format not in ("url", "b64_json"):
             response_format = "url"
+        image = (args.get("image") or "").strip()
+        output_format = (args.get("output_format") or "png").strip().lower() or "png"
+        watermark = bool(args.get("watermark", False))
         save_local = args.get("save_local", True)
         output_path = (args.get("output_path") or "").strip()
 
         profile, profile_error = self._resolve_preferred_profile()
         if profile_error:
             return ToolResult.fail(profile_error)
+
+        image_input = None
+        if image:
+            image_input, image_error = self._normalize_image_input(image)
+            if image_error:
+                return ToolResult.fail(image_error)
 
         try:
             if profile:
@@ -84,8 +108,15 @@ class ImageGenerate(BaseTool):
                     prompt=prompt,
                     size=size,
                     response_format=response_format,
+                    image=image_input,
+                    output_format=output_format,
+                    watermark=watermark,
                 )
             else:
+                if image_input:
+                    return ToolResult.fail(
+                        "Error: image-to-image requires an image generation profile; current bot fallback only supports text-to-image"
+                    )
                 result = self._generate_via_bot_fallback(prompt=prompt)
         except requests.Timeout:
             return ToolResult.fail(f"Error: Image generation timed out after {DEFAULT_TIMEOUT}s")
@@ -170,7 +201,16 @@ class ImageGenerate(BaseTool):
             "api_base": api_base,
         }, None
 
-    def _generate_via_profile(self, profile: dict, prompt: str, size: str, response_format: str) -> dict:
+    def _generate_via_profile(
+        self,
+        profile: dict,
+        prompt: str,
+        size: str,
+        response_format: str,
+        image: Optional[str] = None,
+        output_format: str = "png",
+        watermark: bool = False,
+    ) -> dict:
         payload = {
             "model": profile["model"],
             "prompt": prompt,
@@ -178,6 +218,10 @@ class ImageGenerate(BaseTool):
         }
         if size:
             payload["size"] = size
+        if image:
+            payload["image"] = image
+            payload["output_format"] = output_format or "png"
+            payload["watermark"] = watermark
 
         headers = {
             "Authorization": f"Bearer {profile['api_key']}",
@@ -316,8 +360,56 @@ class ImageGenerate(BaseTool):
             ".webp": "image/webp",
             ".gif": "image/gif",
             ".bmp": "image/bmp",
+            ".tiff": "image/tiff",
+            ".tif": "image/tiff",
         }
         return mime_map.get(ext, "application/octet-stream")
+
+    def _normalize_image_input(self, image: str) -> Tuple[Optional[str], Optional[str]]:
+        image = image.strip()
+        if not image:
+            return None, None
+
+        if image.startswith("data:image/"):
+            if ";base64," not in image:
+                return None, "Error: image data URL must use the format data:image/<type>;base64,<base64_data>"
+            return image, None
+
+        if image.startswith(("http://", "https://")):
+            return image, None
+
+        resolved_path = image
+        if not os.path.isabs(resolved_path):
+            resolved_path = os.path.abspath(os.path.join(self.cwd, resolved_path))
+
+        if not os.path.exists(resolved_path):
+            return None, f"Error: image file not found: {image}"
+        if not os.path.isfile(resolved_path):
+            return None, f"Error: image path is not a file: {image}"
+
+        ext = os.path.splitext(resolved_path)[1].lower()
+        mime_map = {
+            ".jpg": "jpeg",
+            ".jpeg": "jpeg",
+            ".png": "png",
+            ".webp": "webp",
+            ".gif": "gif",
+            ".bmp": "bmp",
+            ".tiff": "tiff",
+            ".tif": "tiff",
+        }
+        image_type = mime_map.get(ext)
+        if not image_type:
+            return None, f"Error: unsupported input image format: {ext or '(no extension)'}"
+
+        try:
+            with open(resolved_path, "rb") as f:
+                raw = f.read()
+            encoded = base64.b64encode(raw).decode("utf-8")
+            return f"data:image/{image_type};base64,{encoded}", None
+        except Exception as e:
+            logger.warning(f"[ImageGenerate] Failed to encode local image: {e}")
+            return None, f"Error: failed to read input image: {e}"
 
     @staticmethod
     def _format_size(size_bytes: int) -> str:
