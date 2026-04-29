@@ -499,6 +499,21 @@ class ConversationStore:
             finally:
                 conn.close()
 
+    def has_session(self, session_id: str) -> bool:
+        """Return True if the session exists in the sessions table."""
+        if not session_id:
+            return False
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT 1 FROM sessions WHERE session_id = ? LIMIT 1",
+                    (session_id,),
+                ).fetchone()
+                return bool(row)
+            finally:
+                conn.close()
+
     def cleanup_old_sessions(self, max_age_days: Optional[int] = None) -> int:
         """
         Delete sessions that have not been active within max_age_days.

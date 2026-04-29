@@ -610,16 +610,25 @@ class CloudClient(LinkAIClient):
                 "payload": {"status": "error", "message": "session_id required"},
             }
 
-        # Web channel stores sessions with a "session_" prefix
-        if not session_id.startswith("session_"):
-            session_id = f"session_{session_id}"
-        logger.info(f"[CloudClient] history query: session={session_id}, page={page}, page_size={page_size}")
-
         try:
             from agent.memory.conversation_store import get_conversation_store
             store = get_conversation_store()
+
+            # Prefer exact id. For backward compatibility, fallback to
+            # legacy web ids with `session_` prefix only if that row exists.
+            resolved_session_id = session_id
+            if not store.has_session(resolved_session_id) and not session_id.startswith("session_"):
+                prefixed = f"session_{session_id}"
+                if store.has_session(prefixed):
+                    resolved_session_id = prefixed
+
+            logger.info(
+                f"[CloudClient] history query: session={resolved_session_id}, "
+                f"page={page}, page_size={page_size}"
+            )
+
             result = store.load_history_page(
-                session_id=session_id,
+                session_id=resolved_session_id,
                 page=page,
                 page_size=page_size,
             )

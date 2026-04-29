@@ -106,10 +106,27 @@ class SessionService:
         except Exception:
             pass
 
-    @staticmethod
-    def _normalize_sid(session_id: str) -> str:
-        if session_id and not session_id.startswith("session_"):
-            return f"session_{session_id}"
+    def _normalize_sid(self, session_id: str, store) -> str:
+        """
+        Resolve session id with backward-compatible fallback for old web ids.
+
+        Rules:
+        - Prefer the exact session_id when it already exists.
+        - If caller passes a legacy web id without the `session_` prefix,
+          fallback to `session_<id>` only when that row exists.
+        - Never force-prefix non-web ids (e.g. `qq`, `agent:session` forms).
+        """
+        if not session_id:
+            return session_id
+
+        if store.has_session(session_id):
+            return session_id
+
+        if not session_id.startswith("session_"):
+            prefixed = f"session_{session_id}"
+            if store.has_session(prefixed):
+                return prefixed
+
         return session_id
 
     # ------------------------------------------------------------------
@@ -127,9 +144,8 @@ class SessionService:
     def delete_session(self, session_id: str) -> None:
         if not session_id:
             raise ValueError("session_id required")
-        session_id = self._normalize_sid(session_id)
-
         store = self._get_store()
+        session_id = self._normalize_sid(session_id, store)
         store.clear_session(session_id)
         self._remove_agent(session_id)
         logger.info(f"[SessionService] Session deleted: {session_id}")
@@ -139,9 +155,8 @@ class SessionService:
             raise ValueError("session_id required")
         if not title:
             raise ValueError("title required")
-        session_id = self._normalize_sid(session_id)
-
         store = self._get_store()
+        session_id = self._normalize_sid(session_id, store)
         found = store.rename_session(session_id, title)
         if not found:
             raise ValueError("session not found")
@@ -152,9 +167,8 @@ class SessionService:
         """
         if not session_id:
             raise ValueError("session_id required")
-        session_id = self._normalize_sid(session_id)
-
         store = self._get_store()
+        session_id = self._normalize_sid(session_id, store)
         new_seq = store.clear_context(session_id)
         self._remove_agent(session_id)
         return new_seq
@@ -168,11 +182,9 @@ class SessionService:
             raise ValueError("session_id required")
         if not user_message:
             raise ValueError("user_message required")
-        session_id = self._normalize_sid(session_id)
-
         title = generate_session_title(user_message, assistant_reply)
-
         store = self._get_store()
+        session_id = self._normalize_sid(session_id, store)
         updated = store.rename_session(session_id, title)
         logger.info(f"[SessionService] Title set: sid={session_id}, "
                      f"title='{title}', db_updated={updated}")
