@@ -45,6 +45,10 @@ class ImageGenerate(BaseTool):
                 "type": "string",
                 "description": "Optional response format: url or b64_json (default: url)",
             },
+            "output_path": {
+                "type": "string",
+                "description": "Optional output file path (relative or absolute). If provided, the generated image will be saved to this path. If omitted, it will be saved to workspace output directory.",
+            },
             "save_local": {
                 "type": "boolean",
                 "description": "Whether to save generated image to local workspace and auto-send (default: true)",
@@ -67,6 +71,7 @@ class ImageGenerate(BaseTool):
         if response_format not in ("url", "b64_json"):
             response_format = "url"
         save_local = args.get("save_local", True)
+        output_path = (args.get("output_path") or "").strip()
 
         profile, profile_error = self._resolve_preferred_profile()
         if profile_error:
@@ -101,19 +106,20 @@ class ImageGenerate(BaseTool):
         if save_local:
             local_path = None
             if image_url:
-                local_path = self._download_image(image_url)
+                local_path = self._download_image(image_url, output_path)
             elif image_b64:
-                local_path = self._save_b64_image(image_b64)
+                local_path = self._save_b64_image(image_b64, output_path)
 
             if local_path:
                 file_size = os.path.getsize(local_path)
                 file_name = os.path.basename(local_path)
+                mime_type = self._mime_type_from_path(local_path)
                 return ToolResult.success({
                     "type": "file_to_send",
                     "file_type": "image",
                     "path": local_path,
                     "file_name": file_name,
-                    "mime_type": "image/png",
+                    "mime_type": mime_type,
                     "size": file_size,
                     "size_formatted": self._format_size(file_size),
                     "message": "已生成图片，正在发送",
@@ -233,7 +239,7 @@ class ImageGenerate(BaseTool):
             "image_b64": None,
         }
 
-    def _download_image(self, url: str) -> Optional[str]:
+    def _download_image(self, url: str, output_path: str = "") -> Optional[str]:
         try:
             resp = requests.get(url, timeout=DEFAULT_TIMEOUT)
             resp.raise_for_status()
@@ -251,26 +257,67 @@ class ImageGenerate(BaseTool):
         }
         ext = ext_map.get(content_type, ".png")
 
-        out_dir = os.path.join(self.cwd, "tmp", "generated")
-        os.makedirs(out_dir, exist_ok=True)
-        file_path = os.path.join(out_dir, f"image-{uuid.uuid4().hex}{ext}")
+        # Resolve output path
+        if output_path:
+            # User-specified path (relative or absolute)
+            if os.path.isabs(output_path):
+                file_path = output_path
+            else:
+                file_path = os.path.abspath(os.path.join(self.cwd, output_path))
+        else:
+            # Default: workspace_root/tmp/output/image-<uuid>.<ext>
+            out_dir = os.path.join(self.cwd, "tmp", "output")
+            file_path = os.path.join(out_dir, f"image-{uuid.uuid4().hex}{ext}")
+
+        # Create output directory if needed
+        out_dir = os.path.dirname(file_path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+
         with open(file_path, "wb") as f:
             f.write(resp.content)
         return file_path
 
-    def _save_b64_image(self, image_b64: str) -> Optional[str]:
+    def _save_b64_image(self, image_b64: str, output_path: str = "") -> Optional[str]:
         try:
             raw = base64.b64decode(image_b64)
         except Exception as e:
             logger.warning(f"[ImageGenerate] Invalid b64 image: {e}")
             return None
 
-        out_dir = os.path.join(self.cwd, "tmp", "generated")
-        os.makedirs(out_dir, exist_ok=True)
-        file_path = os.path.join(out_dir, f"image-{uuid.uuid4().hex}.png")
+        # Resolve output path
+        if output_path:
+            # User-specified path (relative or absolute)
+            if os.path.isabs(output_path):
+                file_path = output_path
+            else:
+                file_path = os.path.abspath(os.path.join(self.cwd, output_path))
+        else:
+            # Default: workspace_root/tmp/output/image-<uuid>.png
+            out_dir = os.path.join(self.cwd, "tmp", "output")
+            file_path = os.path.join(out_dir, f"image-{uuid.uuid4().hex}.png")
+
+        # Create output directory if needed
+        out_dir = os.path.dirname(file_path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+
         with open(file_path, "wb") as f:
             f.write(raw)
         return file_path
+
+    @staticmethod
+    def _mime_type_from_path(path: str) -> str:
+        ext = os.path.splitext(path)[1].lower()
+        mime_map = {
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".webp": "image/webp",
+            ".gif": "image/gif",
+            ".bmp": "image/bmp",
+        }
+        return mime_map.get(ext, "application/octet-stream")
 
     @staticmethod
     def _format_size(size_bytes: int) -> str:
