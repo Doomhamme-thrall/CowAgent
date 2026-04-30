@@ -484,8 +484,8 @@ function renderMarkdown(text) {
         text = text.replace(/\$(?!\s|\d)([^\n$]+?)\$|\\\(([\s\S]+?)\\\)/g,
             (_, t1, t2) => storeMath((t1 !== undefined ? t1 : t2), false));
 
-        // Step 2: Render markdown.
-        let html = md.render(text);
+        // Step 2: Render markdown. Strip trailing whitespace from markdown-it output.
+        let html = md.render(text).trimEnd();
 
         // Step 3: Replace placeholders with KaTeX-rendered HTML.
         if (mathStore.length && window.katex) {
@@ -1748,18 +1748,14 @@ function createUserMessageEl(content, timestamp, attachments, slotId) {
 
     const textHtml = content ? renderMarkdown(content) : '';
     el.innerHTML = `
-        <div class="flex flex-col items-end gap-1 min-w-0">
+        <div class="flex flex-col items-end gap-1 min-w-0 max-w-[84%] sm:max-w-[64%]">
             <div class="msg-actions">
                 <button class="msg-action-btn" title="${t('edit_message')}" onclick="startEditMessage(this.closest('[data-msg-role=user]'))">
                     <i class="fas fa-pencil"></i>
                 </button>
             </div>
-            <div class="w-fit max-w-[84%] sm:max-w-[64%] min-w-0">
-                <div class="inline-block w-auto max-w-full bg-primary-400 text-white rounded-2xl px-4 py-2 text-sm leading-relaxed msg-content user-bubble">
-                    ${attachHtml}${textHtml}
-                </div>
-                <div class="text-xs text-slate-400 dark:text-slate-500 mt-1.5 text-right">${formatTime(timestamp)}</div>
-            </div>
+            <div class="w-fit max-w-full bg-primary-400 text-white rounded-2xl px-4 py-2 text-sm leading-relaxed msg-content user-bubble">${attachHtml}${textHtml}</div>
+            <div class="text-xs text-slate-400 dark:text-slate-500 mt-1.5 text-right">${formatTime(timestamp)}</div>
         </div>
     `;
     return el;
@@ -1888,10 +1884,7 @@ function createBotMessageEl(content, timestamp, requestId, msg, slotId) {
     el.innerHTML = `
         <img src="assets/logo.jpg" alt="CowAgent" class="w-8 h-8 rounded-lg flex-shrink-0">
         <div class="min-w-0 flex-1 max-w-[85%]">
-            <div class="bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-2xl px-4 py-2.5 text-sm leading-relaxed msg-content text-slate-700 dark:text-slate-200">
-                ${stepsHtml ? `<div class="agent-steps">${stepsHtml}</div>` : ''}
-                <div class="answer-content">${renderMarkdown(displayContent)}</div>
-            </div>
+            <div class="bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-2xl px-4 py-2.5 text-sm leading-relaxed msg-content text-slate-700 dark:text-slate-200">${stepsHtml ? `<div class="agent-steps">${stepsHtml}</div>` : ''}<div class="answer-content">${renderMarkdown(displayContent)}</div></div>
             <div class="flex items-center gap-2 mt-1.5">
                 <span class="text-xs text-slate-400 dark:text-slate-500">${formatTime(timestamp)}</span>
                 <button class="copy-msg-btn text-xs text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400 transition-colors cursor-pointer" title="${currentLang === 'zh' ? '复制' : 'Copy'}">

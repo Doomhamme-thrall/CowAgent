@@ -804,8 +804,7 @@
     overflow-wrap: break-word;
 }
 .user-bubble.msg-content {
-    display: inline-block;
-    width: auto;
+    width: fit-content;
     max-width: 100%;
     text-align: left;
     word-break: break-word;
