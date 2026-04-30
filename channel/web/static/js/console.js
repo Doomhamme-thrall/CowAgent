@@ -1754,8 +1754,8 @@ function createUserMessageEl(content, timestamp, attachments, slotId) {
                     <i class="fas fa-pencil"></i>
                 </button>
             </div>
-            <div class="max-w-[84%] sm:max-w-[64%] min-w-0">
-                <div class="inline-block w-auto max-w-full bg-primary-400 text-white rounded-2xl px-4 py-2.5 text-sm leading-relaxed msg-content user-bubble">
+            <div class="w-fit max-w-[84%] sm:max-w-[64%] min-w-0">
+                <div class="inline-block w-auto max-w-full bg-primary-400 text-white rounded-2xl px-4 py-2 text-sm leading-relaxed msg-content user-bubble">
                     ${attachHtml}${textHtml}
                 </div>
                 <div class="text-xs text-slate-400 dark:text-slate-500 mt-1.5 text-right">${formatTime(timestamp)}</div>
@@ -1888,7 +1888,7 @@ function createBotMessageEl(content, timestamp, requestId, msg, slotId) {
     el.innerHTML = `
         <img src="assets/logo.jpg" alt="CowAgent" class="w-8 h-8 rounded-lg flex-shrink-0">
         <div class="min-w-0 flex-1 max-w-[85%]">
-            <div class="bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-2xl px-4 py-3 text-sm leading-relaxed msg-content text-slate-700 dark:text-slate-200">
+            <div class="bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-2xl px-4 py-2.5 text-sm leading-relaxed msg-content text-slate-700 dark:text-slate-200">
                 ${stepsHtml ? `<div class="agent-steps">${stepsHtml}</div>` : ''}
                 <div class="answer-content">${renderMarkdown(displayContent)}</div>
             </div>
