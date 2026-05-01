@@ -116,8 +116,7 @@
                 "group": "可选工具",
                 "pages": [
                   "tools/web-search",
-                  "tools/vision",
-                  "tools/browser"
+                  "tools/vision"
                 ]
               }
             ]
@@ -292,8 +291,7 @@
                 "group": "Optional Tools",
                 "pages": [
                   "en/tools/web-search",
-                  "en/tools/vision",
-                  "en/tools/browser"
+                  "en/tools/vision"
                 ]
               }
             ]
@@ -468,8 +466,7 @@
                 "group": "オプションツール",
                 "pages": [
                   "ja/tools/web-search",
-                  "ja/tools/vision",
-                  "ja/tools/browser"
+                  "ja/tools/vision"
                 ]
               }
             ]

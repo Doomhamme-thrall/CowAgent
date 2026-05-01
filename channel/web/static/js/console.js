@@ -1604,7 +1604,7 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, slotId) {
                 scrollChatToBottom();
 
             } else if (item.type === 'phase') {
-                // Coarse progress (e.g. cow install-browser); must not close SSE (unlike "done")
+                // Coarse progress must not close SSE (unlike "done")
                 ensureBotEl();
                 const wrap = document.createElement('div');
                 wrap.className = 'text-xs sm:text-sm text-slate-600 dark:text-slate-400 border-l-2 border-primary-400 pl-2 py-1 my-0.5';

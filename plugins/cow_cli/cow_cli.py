@@ -3,11 +3,9 @@ CowCli plugin - Intercept cow/slash commands in chat messages.
 
 Matches messages like:
   cow skill list
-  cow install-browser
   /skill list
   /context clear
   /status
-  /install-browser
 
 Does NOT match:
   cow是什么
@@ -32,7 +30,6 @@ KNOWN_COMMANDS = {
     "start", "stop", "restart",
     "skill", "context", "config",
     "knowledge", "memory",
-    "install-browser",
 }
 
 # Commands that can only run from the CLI (terminal), not in chat
@@ -458,51 +455,6 @@ class CowCliPlugin(Plugin):
             if model_name.startswith(prefix):
                 return btype
         return const.OPENAI
-
-    # ------------------------------------------------------------------
-    # install-browser (shared logic with cow install-browser CLI)
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _send_install_progress(e_context, text: str) -> None:
-        """Push a short status line to the chat channel (SSE: phase event, not done)."""
-        if e_context is None:
-            logger.info(f"[CowCli] install-browser: {text}")
-            return
-        try:
-            channel = e_context["channel"]
-            context = e_context["context"]
-            if channel and context:
-                r = Reply(ReplyType.TEXT, text)
-                r.sse_phase = True
-                channel.send(r, context)
-        except Exception as e:
-            logger.warning(f"[CowCli] install-browser progress send failed: {e}")
-
-    def _cmd_install_browser(self, args: str, e_context, **_) -> str:
-        from cli.commands.install import run_install_browser
-
-        if args.strip():
-            return (
-                "用法: /install-browser\n\n"
-                "无需参数，等同于终端执行 `cow install-browser`。\n"
-                "安装过程可能持续数分钟；进度会以多条消息推送，pip 详细输出见服务日志。"
-            )
-
-        # Suppress detailed stream in chat; phases go through channel.send
-        def _noop_stream(msg: str, fg=None):
-            pass
-
-        code = run_install_browser(
-            stream=_noop_stream,
-            on_phase=lambda m: self._send_install_progress(e_context, m),
-        )
-        if code != 0:
-            return (
-                "❌ 安装未成功结束，请查看上方分段提示或服务器日志；"
-                "也可在终端执行 `cow install-browser`。"
-            )
-        return "✅ 安装流程已结束。请重启 CowAgent 后使用 browser 工具（进度见上方消息）。"
 
     # ------------------------------------------------------------------
     # skill

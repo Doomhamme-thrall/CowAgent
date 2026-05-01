@@ -27,12 +27,7 @@ $tool reset: 重置工具。
 #### 2.1 url-get
 ###### 往往用来获取某个网站具体内容，结果可能会被反爬策略影响
 
-#### 2.2 browser
-###### 浏览器，功能与2.1类似，但能更好模拟，不会被识别为爬虫影响获取网站内容
-
-> 注1：url-get默认配置、browser需额外配置，browser依赖google-chrome，你需要提前安装好
-
-> 注2：（可通过`browser_use_summary`或 `url_get_use_summary`开关）当检测到长文本时会进入summary tool总结长文本，tokens可能会大量消耗！
+> 注1：（可通过`url_get_use_summary`开关）当检测到长文本时会进入summary tool总结长文本，tokens可能会大量消耗！
 
 这是debian端安装google-chrome教程，其他系统请自行查找
 > https://www.linuxjournal.com/content/how-can-you-install-google-browser-debian
@@ -79,7 +74,7 @@ $tool reset: 重置工具。
 #### 6.3. finance-news
 ###### 获取实时的金融财政新闻
 
-> 该工具需要用到browser工具解决反爬问题
+> 该工具需要额外的反爬处理支持
 
 
 ### 7. bing-search *

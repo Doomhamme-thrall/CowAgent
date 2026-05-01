@@ -213,8 +213,6 @@ class Tool(Plugin):
             "terminal_timeout": kwargs.get("terminal_timeout", 20),  # 允许命令最长执行时间
             # for visual tool
             "caption_api_key": kwargs.get("caption_api_key", ""),  # ali dashscope apikey
-            # for browser tool
-            "browser_use_summary": kwargs.get("browser_use_summary", True),  # 是否对返回结果使用tool功能
             # for url-get tool
             "url_get_use_summary": kwargs.get("url_get_use_summary", True),  # 是否对返回结果使用tool功能
             # for wikipedia tool

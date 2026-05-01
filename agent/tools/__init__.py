@@ -71,25 +71,6 @@ ImageGenerate = _safe_import(
     "",
 )
 
-
-def _import_browser_tool():
-    try:
-        from agent.tools.browser.browser_tool import BrowserTool
-        return BrowserTool
-    except ImportError as e:
-        logger.info(
-            f"[Tools] BrowserTool not loaded - missing dependency: {e}\n"
-            f"  To enable browser tool, run:\n"
-            f"    pip install playwright\n"
-            f"    playwright install chromium"
-        )
-    except Exception as e:
-        logger.error(f"[Tools] BrowserTool failed to load: {e}", exc_info=True)
-    return None
-
-
-BrowserTool = _import_browser_tool()
-
 GoogleSearch = None
 FileSave = None
 Terminal = None
@@ -111,7 +92,6 @@ __all__ = [
     "WebFetch",
     "Vision",
     "ImageGenerate",
-    "BrowserTool",
     "GoogleSearch",
     "FileSave",
     "Terminal",

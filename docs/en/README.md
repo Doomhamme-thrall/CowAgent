@@ -105,17 +105,7 @@ pip3 install -e .
 
 After installation, use `cow` commands to manage the service (start, stop, update, etc.) and skills. See [Command Docs](https://docs.cowagent.ai/en/cli/index).
 
-**4. Install browser (optional)**
-
-If you need the Agent to operate a browser (visit web pages, fill forms, etc.):
-
-```bash
-cow install-browser
-```
-
-This auto-installs `playwright` and Chromium. See [Browser Tool Docs](https://docs.cowagent.ai/en/tools/browser).
-
-**5. Configure**
+**4. Configure**
 
 ```bash
 cp config-template.json config.json

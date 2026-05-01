@@ -1,6 +1,6 @@
 ---
 title: Features
-description: CowAgent long-term memory, task planning, skills system, CLI commands, and browser tool in detail
+description: CowAgent long-term memory, task planning, skills system, and CLI commands in detail
 ---
 
 ## 1. Long-term Memory
@@ -38,7 +38,7 @@ See [Personal Knowledge Base](/en/knowledge) for details.
 
 Tools are the core of how the Agent accesses operating system resources. The Agent intelligently selects and invokes tools based on task requirements, performing file read/write, command execution, scheduled tasks, and more. Built-in tools are implemented in the project's `agent/tools/` directory.
 
-**Key tools:** file read/write/edit, Bash terminal, browser, file send, scheduler, memory search, web search, environment config, and more.
+**Key tools:** file read/write/edit, Bash terminal, file send, scheduler, memory search, web search, environment config, and more.
 
 ### 3.1 Terminal and File Access
 
@@ -64,15 +64,7 @@ The `scheduler` tool enables dynamic scheduled tasks, supporting **one-time task
   <img src="https://cdn.link-ai.tech/doc/20260202195402.png" width="800" />
 </Frame>
 
-### 3.4 Browser
-
-The built-in `browser` tool allows the Agent to control a Chromium browser to visit web pages, fill forms, click elements, and take screenshots, with support for dynamic JS-rendered pages. Run `cow install-browser` to install with one command, automatically adapting to server (headless) and desktop environments:
-
-<Frame>
-  <img src="https://cdn.link-ai.tech/doc/20260401110103.png" width="800" />
-</Frame>
-
-### 3.5 Environment Variable Management
+### 3.4 Environment Variable Management
 
 Secrets required by skills are stored in an environment variable file, managed by the `env_config` tool. You can update secrets through conversation, with built-in security protection and desensitization:
 
@@ -133,7 +125,6 @@ cow start              # Start service
 cow stop               # Stop service
 cow update             # Update and restart
 cow skill install pptx # Install a skill
-cow install-browser    # Install browser tool
 ```
 
 See [Command Overview](https://docs.cowagent.ai/en/cli) for details.

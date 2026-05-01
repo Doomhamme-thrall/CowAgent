@@ -105,17 +105,7 @@ pip3 install -e .
 
 インストール後、`cow` コマンドでサービス管理（起動、停止、更新など）やSkill管理ができます。[コマンドドキュメント](https://docs.cowagent.ai/ja/cli/index)を参照してください。
 
-**4. ブラウザのインストール（任意）**
-
-Agentにブラウザ操作（Webページへのアクセス、フォーム入力など）が必要な場合：
-
-```bash
-cow install-browser
-```
-
-`playwright` と Chromium を自動インストールします。[ブラウザツールドキュメント](https://docs.cowagent.ai/ja/tools/browser)を参照してください。
-
-**5. 設定**
+**4. 設定**
 
 ```bash
 cp config-template.json config.json
