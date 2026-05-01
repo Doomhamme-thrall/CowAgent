@@ -143,6 +143,7 @@ class WebChannel(ChatChannel):
                 "session_id": session_id,
                 "user_content": user_content or "",
                 "assistant_text": "",
+                "response_meta": None,
                 "steps": [],
                 "_active_reasoning": "",
                 "_active_tool_idx": -1,
@@ -224,6 +225,11 @@ class WebChannel(ChatChannel):
                     })
                     snapshot["assistant_text"] = ""
 
+            elif event_type == "response_stats":
+                meta = data if isinstance(data, dict) else None
+                if meta:
+                    snapshot["response_meta"] = meta
+
             snapshot["updated_at"] = int(time.time())
 
     def _clear_inflight_turn(self, request_id: str):
@@ -279,6 +285,7 @@ class WebChannel(ChatChannel):
                     "role": "assistant",
                     "content": assistant_text,
                     "steps": steps,
+                    "response_meta": snap.get("response_meta"),
                     "created_at": int(snap.get("updated_at", created_at)),
                     "_inflight": True,
                     "request_id": snap.get("request_id", ""),
@@ -444,6 +451,10 @@ class WebChannel(ChatChannel):
                         "timestamp": time.time(),
                     })
                     self._clear_inflight_turn(request_id)
+
+            elif event_type == "response_stats":
+                meta = data if isinstance(data, dict) else {}
+                q.put({"type": "stats", "meta": meta})
 
             elif event_type == "file_to_send":
                 file_path = data.get("path", "")

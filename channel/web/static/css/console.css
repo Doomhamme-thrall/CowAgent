@@ -803,6 +803,18 @@
     word-break: break-word;
     overflow-wrap: break-word;
 }
+.answer-meta {
+    margin-top: 0.55rem;
+    padding-top: 0.45rem;
+    border-top: 1px dashed rgba(148, 163, 184, 0.35);
+    font-size: 0.72rem;
+    line-height: 1.25;
+    color: #94a3b8;
+}
+.dark .answer-meta {
+    border-top-color: rgba(148, 163, 184, 0.28);
+    color: #64748b;
+}
 .user-bubble.msg-content {
     width: fit-content;
     max-width: 100%;

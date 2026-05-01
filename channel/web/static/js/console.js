@@ -102,6 +102,7 @@ const I18N = {
         confirm_cancel: '取消',
         error_send: '发送失败，请稍后再试。', error_timeout: '请求超时，请再试一次。',
         thinking_in_progress: '思考中...', thinking_done: '已深度思考', thinking_duration: '耗时',
+        meta_model: '模型', meta_tokens: 'Token', meta_chars: '字数', meta_ttfb: '首字延迟',
         retry: '重试', edit_message: '编辑', edit_submit: '提交',
         config_default_models: '默认模型设置',
         config_default_model_web: 'Web 对话默认模型',
@@ -218,6 +219,7 @@ const I18N = {
         confirm_cancel: 'Cancel',
         error_send: 'Failed to send. Please try again.', error_timeout: 'Request timeout. Please try again.',
         thinking_in_progress: 'Thinking...', thinking_done: 'Thought', thinking_duration: 'Duration',
+        meta_model: 'Model', meta_tokens: 'Tokens', meta_chars: 'Chars', meta_ttfb: 'First token',
         retry: 'Retry', edit_message: 'Edit', edit_submit: 'Submit',
         config_default_models: 'Default Model Settings',
         config_default_model_web: 'Web Chat Default Model',
@@ -1406,6 +1408,8 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, slotId) {
     let currentReasoningEl = null;  // live reasoning bubble
     let reasoningText = '';
     let reasoningStartTime = 0;
+    let responseMeta = null;
+    let metaEl = null;
     let done = false;
 
     const MAX_RECONNECTS = 10;
@@ -1427,6 +1431,7 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, slotId) {
                     <div class="agent-steps"></div>
                     <div class="answer-content sse-streaming"></div>
                     <div class="media-content"></div>
+                    <div class="answer-meta" style="display:none"></div>
                 </div>
                 <div class="flex items-center gap-2 mt-1.5">
                     <span class="text-xs text-slate-400 dark:text-slate-500">${formatTime(timestamp)}</span>
@@ -1445,6 +1450,8 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, slotId) {
         stepsEl = botEl.querySelector('.agent-steps');
         contentEl = botEl.querySelector('.answer-content');
         mediaEl = botEl.querySelector('.media-content');
+        metaEl = botEl.querySelector('.answer-meta');
+        _renderResponseMeta(metaEl, responseMeta);
     }
 
     function connect() {
@@ -1605,6 +1612,12 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, slotId) {
                 stepsEl.appendChild(wrap);
                 scrollChatToBottom();
 
+            } else if (item.type === 'stats') {
+                responseMeta = item.meta || null;
+                if (botEl) {
+                    _renderResponseMeta(metaEl, responseMeta);
+                }
+
             } else if (item.type === 'done') {
                 done = true;
                 es.close();
@@ -1615,11 +1628,12 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, slotId) {
 
                 if (!botEl && finalText) {
                     if (loadingEl) { loadingEl.remove(); loadingEl = null; }
-                    addBotMessage(finalText, new Date((item.timestamp || Date.now() / 1000) * 1000), requestId, null, slotId);
+                    addBotMessage(finalText, new Date((item.timestamp || Date.now() / 1000) * 1000), requestId, { response_meta: responseMeta }, slotId);
                 } else if (botEl) {
                     contentEl.classList.remove('sse-streaming');
                     if (finalText) contentEl.innerHTML = renderMarkdown(finalText);
                     contentEl.dataset.rawMd = finalText || '';
+                    _renderResponseMeta(metaEl, responseMeta);
                     const copyBtn = botEl.querySelector('.copy-msg-btn');
                     if (copyBtn && finalText) copyBtn.style.display = '';
                     applyHighlighting(botEl);
@@ -1858,6 +1872,53 @@ function renderStepsHtml(steps) {
     return { stepsHtml: html, lastContentText };
 }
 
+function _normalizeResponseMeta(meta) {
+    if (!meta || typeof meta !== 'object') return null;
+
+    const usage = (meta.usage && typeof meta.usage === 'object') ? meta.usage : null;
+    const totalTokens = usage && usage.total_tokens !== undefined && usage.total_tokens !== null
+        ? Number(usage.total_tokens)
+        : NaN;
+    const charCount = meta.char_count !== undefined && meta.char_count !== null
+        ? Number(meta.char_count)
+        : NaN;
+    const ttfbMs = meta.first_token_latency_ms !== undefined && meta.first_token_latency_ms !== null
+        ? Number(meta.first_token_latency_ms)
+        : NaN;
+    const model = meta.model ? String(meta.model) : '-';
+
+    return {
+        model,
+        totalTokens: Number.isFinite(totalTokens) ? Math.max(0, Math.round(totalTokens)) : null,
+        charCount: Number.isFinite(charCount) ? Math.max(0, Math.round(charCount)) : null,
+        ttfbMs: Number.isFinite(ttfbMs) ? Math.max(0, Math.round(ttfbMs)) : null,
+    };
+}
+
+function _formatResponseMeta(meta) {
+    const normalized = _normalizeResponseMeta(meta);
+    if (!normalized) return '';
+
+    const modelText = `${t('meta_model')}: ${normalized.model || '-'}`;
+    const tokensText = `${t('meta_tokens')}: ${normalized.totalTokens !== null ? normalized.totalTokens : '-'}`;
+    const charsText = `${t('meta_chars')}: ${normalized.charCount !== null ? normalized.charCount : '-'}`;
+    const ttfbText = `${t('meta_ttfb')}: ${normalized.ttfbMs !== null ? `${normalized.ttfbMs}ms` : '-'}`;
+
+    return `${modelText} | ${tokensText} | ${charsText} | ${ttfbText}`;
+}
+
+function _renderResponseMeta(metaEl, meta) {
+    if (!metaEl) return;
+    const txt = _formatResponseMeta(meta);
+    if (!txt) {
+        metaEl.style.display = 'none';
+        metaEl.textContent = '';
+        return;
+    }
+    metaEl.style.display = '';
+    metaEl.textContent = txt;
+}
+
 function createBotMessageEl(content, timestamp, requestId, msg, slotId) {
     const el = document.createElement('div');
     el.className = 'flex gap-3 px-4 sm:px-6 py-3 msg-row';
@@ -1884,7 +1945,7 @@ function createBotMessageEl(content, timestamp, requestId, msg, slotId) {
     el.innerHTML = `
         <img src="assets/logo.jpg" alt="CowAgent" class="w-8 h-8 rounded-lg flex-shrink-0">
         <div class="min-w-0 flex-1 max-w-[85%]">
-            <div class="bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-2xl px-4 py-2.5 text-sm leading-relaxed msg-content text-slate-700 dark:text-slate-200">${stepsHtml ? `<div class="agent-steps">${stepsHtml}</div>` : ''}<div class="answer-content">${renderMarkdown(displayContent)}</div></div>
+            <div class="bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-2xl px-4 py-2.5 text-sm leading-relaxed msg-content text-slate-700 dark:text-slate-200">${stepsHtml ? `<div class="agent-steps">${stepsHtml}</div>` : ''}<div class="answer-content">${renderMarkdown(displayContent)}</div><div class="answer-meta" style="display:none"></div></div>
             <div class="flex items-center gap-2 mt-1.5">
                 <span class="text-xs text-slate-400 dark:text-slate-500">${formatTime(timestamp)}</span>
                 <button class="copy-msg-btn text-xs text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400 transition-colors cursor-pointer" title="${currentLang === 'zh' ? '复制' : 'Copy'}">
@@ -1899,6 +1960,7 @@ function createBotMessageEl(content, timestamp, requestId, msg, slotId) {
         </div>
     `;
     el.querySelector('.answer-content').dataset.rawMd = displayContent;
+    _renderResponseMeta(el.querySelector('.answer-meta'), msg && msg.response_meta);
     applyHighlighting(el);
     bindChatKnowledgeLinks(el);
     return el;

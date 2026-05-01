@@ -65,6 +65,66 @@ class AgentStreamExecutor:
         
         # Track files to send (populated by read tool)
         self.files_to_send = []  # List of file metadata dicts
+        self._last_call_metrics = {}
+
+    @staticmethod
+    def _normalize_usage(usage: Any) -> Optional[Dict[str, int]]:
+        """Normalize usage payload from provider chunks to prompt/completion/total tokens."""
+        if not isinstance(usage, dict):
+            return None
+
+        prompt_tokens = usage.get("prompt_tokens")
+        if prompt_tokens is None:
+            prompt_tokens = usage.get("input_tokens")
+
+        completion_tokens = usage.get("completion_tokens")
+        if completion_tokens is None:
+            completion_tokens = usage.get("output_tokens")
+
+        total_tokens = usage.get("total_tokens")
+
+        def _to_int(v):
+            try:
+                if v is None:
+                    return None
+                return int(v)
+            except Exception:
+                return None
+
+        prompt_tokens = _to_int(prompt_tokens)
+        completion_tokens = _to_int(completion_tokens)
+        total_tokens = _to_int(total_tokens)
+
+        if total_tokens is None and prompt_tokens is not None and completion_tokens is not None:
+            total_tokens = prompt_tokens + completion_tokens
+
+        if prompt_tokens is None and completion_tokens is None and total_tokens is None:
+            return None
+
+        return {
+            "prompt_tokens": prompt_tokens or 0,
+            "completion_tokens": completion_tokens or 0,
+            "total_tokens": total_tokens or 0,
+        }
+
+    def _extract_usage_from_chunk(self, chunk: Any) -> Optional[Dict[str, int]]:
+        """Extract usage info from a stream chunk when provider supports it."""
+        if not isinstance(chunk, dict):
+            return None
+
+        usage = self._normalize_usage(chunk.get("usage"))
+        if usage:
+            return usage
+
+        choices = chunk.get("choices")
+        if isinstance(choices, list) and choices:
+            choice0 = choices[0]
+            if isinstance(choice0, dict):
+                usage = self._normalize_usage(choice0.get("usage"))
+                if usage:
+                    return usage
+
+        return None
 
     def _emit_event(self, event_type: str, data: dict = None):
         """Emit event"""
@@ -217,6 +277,14 @@ class AgentStreamExecutor:
 
         self._emit_event("agent_start")
 
+        aggregated_usage = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
+        usage_observed = False
+        first_token_latency_ms = None
+
         final_response = ""
         turn = 0
 
@@ -228,6 +296,17 @@ class AgentStreamExecutor:
 
                 # Call LLM (enable retry_on_empty for better reliability)
                 assistant_msg, tool_calls = self._call_llm_stream(retry_on_empty=True)
+                call_metrics = self._last_call_metrics or {}
+                if first_token_latency_ms is None and call_metrics.get("first_token_latency_ms") is not None:
+                    first_token_latency_ms = call_metrics.get("first_token_latency_ms")
+
+                call_usage = call_metrics.get("usage")
+                if isinstance(call_usage, dict):
+                    usage_observed = True
+                    aggregated_usage["prompt_tokens"] += int(call_usage.get("prompt_tokens", 0) or 0)
+                    aggregated_usage["completion_tokens"] += int(call_usage.get("completion_tokens", 0) or 0)
+                    aggregated_usage["total_tokens"] += int(call_usage.get("total_tokens", 0) or 0)
+
                 final_response = assistant_msg
 
                 # No tool calls, end loop
@@ -509,6 +588,14 @@ class AgentStreamExecutor:
 
         finally:
             final_response = final_response.strip() if final_response else final_response
+            response_stats = {
+                "model": getattr(self.model, "model", "") or "",
+                "char_count": len(final_response or ""),
+                "first_token_latency_ms": first_token_latency_ms,
+            }
+            if usage_observed:
+                response_stats["usage"] = aggregated_usage
+            self._emit_event("response_stats", response_stats)
             logger.info(f"[Agent] 🏁 完成 ({turn}轮)")
             self._emit_event("agent_end", {"final_response": final_response})
 
@@ -533,6 +620,7 @@ class AgentStreamExecutor:
         # NOT here — trimming mid-execution would strip the current run's
         # tool_use/tool_result chains and cause LLM loops.
         self._validate_and_fix_messages()
+        self._last_call_metrics = {}
 
         # Prepare messages
         messages = self._prepare_messages()
@@ -562,6 +650,9 @@ class AgentStreamExecutor:
         self._emit_event("message_start", {"role": "assistant"})
 
         # Streaming response
+        request_start_time = time.time()
+        first_chunk_time = None
+        chunk_usage = None
         full_content = ""
         full_reasoning = ""
         tool_calls_buffer = {}  # {index: {id, name, arguments}}
@@ -572,6 +663,10 @@ class AgentStreamExecutor:
             stream = self.model.call_stream(request)
 
             for chunk in stream:
+                usage_candidate = self._extract_usage_from_chunk(chunk)
+                if usage_candidate:
+                    chunk_usage = usage_candidate
+
                 # Check for errors
                 if isinstance(chunk, dict) and chunk.get("error"):
                     # Extract error message from nested structure
@@ -630,6 +725,8 @@ class AgentStreamExecutor:
                     # Handle text content
                     content_delta = delta.get("content") or ""
                     if content_delta:
+                        if first_chunk_time is None:
+                            first_chunk_time = time.time()
                         # Filter out <think> tags from content
                         filtered_delta = self._filter_think_tags(content_delta)
                         full_content += filtered_delta
@@ -638,6 +735,8 @@ class AgentStreamExecutor:
 
                     # Handle tool calls
                     if "tool_calls" in delta and delta["tool_calls"]:
+                        if first_chunk_time is None:
+                            first_chunk_time = time.time()
                         for tc_delta in delta["tool_calls"]:
                             index = tc_delta.get("index", 0)
 
@@ -664,6 +763,9 @@ class AgentStreamExecutor:
                         gemini_raw_parts = delta["_gemini_raw_parts"]
                     elif isinstance(choice, dict) and choice.get("_gemini_raw_parts"):
                         gemini_raw_parts = choice["_gemini_raw_parts"]
+
+                    if reasoning_delta and first_chunk_time is None:
+                        first_chunk_time = time.time()
 
         except Exception as e:
             error_str = str(e)
@@ -862,6 +964,14 @@ class AgentStreamExecutor:
             "content": full_content,
             "tool_calls": tool_calls
         })
+
+        first_token_latency_ms = None
+        if first_chunk_time is not None:
+            first_token_latency_ms = int(max(0, round((first_chunk_time - request_start_time) * 1000)))
+        self._last_call_metrics = {
+            "usage": chunk_usage,
+            "first_token_latency_ms": first_token_latency_ms,
+        }
 
         return full_content, tool_calls
 
