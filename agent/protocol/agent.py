@@ -106,7 +106,7 @@ class Agent:
         """
         Build the complete system prompt from scratch every time.
 
-        Re-reads AGENT.md / USER.md / RULE.md from disk, refreshes skills,
+        Re-reads workspace context files (e.g. AGENT.md / MEMORY.md) from disk, refreshes skills,
         tools, and runtime info so any change takes effect immediately.
         Falls back to the cached self.system_prompt on error.
         """
