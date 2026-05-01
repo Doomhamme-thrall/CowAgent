@@ -131,7 +131,160 @@ class WebChannel(ChatChannel):
         self.session_queues = {}  # session_id -> Queue (fallback polling)
         self.request_to_session = {}  # request_id -> session_id
         self.sse_queues = {}  # request_id -> Queue (SSE streaming)
+        self.inflight_turns = {}  # request_id -> in-flight turn snapshot for refresh restore
+        self._inflight_lock = threading.Lock()
         self._http_server = None
+
+    def _init_inflight_turn(self, request_id: str, session_id: str, user_content: str):
+        now = int(time.time())
+        with self._inflight_lock:
+            self.inflight_turns[request_id] = {
+                "request_id": request_id,
+                "session_id": session_id,
+                "user_content": user_content or "",
+                "assistant_text": "",
+                "steps": [],
+                "_active_reasoning": "",
+                "_active_tool_idx": -1,
+                "created_at": now,
+                "updated_at": now,
+            }
+
+    def _append_step_if_needed(self, snapshot: dict, step: dict):
+        if not step:
+            return
+        snapshot["steps"].append(step)
+
+    @staticmethod
+    def _snapshot_tool_arguments(arguments):
+        if isinstance(arguments, dict):
+            return arguments
+        return {}
+
+    def _update_inflight_turn(self, request_id: str, event_type: str, data: dict):
+        with self._inflight_lock:
+            snapshot = self.inflight_turns.get(request_id)
+            if not snapshot:
+                return
+
+            if event_type == "reasoning_update":
+                delta = data.get("delta", "")
+                if delta:
+                    snapshot["_active_reasoning"] += delta
+
+            elif event_type == "message_update":
+                delta = data.get("delta", "")
+                if snapshot.get("_active_reasoning"):
+                    self._append_step_if_needed(snapshot, {
+                        "type": "thinking",
+                        "content": snapshot["_active_reasoning"],
+                    })
+                    snapshot["_active_reasoning"] = ""
+                if delta:
+                    snapshot["assistant_text"] += delta
+
+            elif event_type == "tool_execution_start":
+                if snapshot.get("_active_reasoning"):
+                    self._append_step_if_needed(snapshot, {
+                        "type": "thinking",
+                        "content": snapshot["_active_reasoning"],
+                    })
+                    snapshot["_active_reasoning"] = ""
+                if snapshot.get("assistant_text", "").strip():
+                    self._append_step_if_needed(snapshot, {
+                        "type": "content",
+                        "content": snapshot["assistant_text"].strip(),
+                    })
+                    snapshot["assistant_text"] = ""
+
+                tool_step = {
+                    "type": "tool",
+                    "id": f"web_tool_{len(snapshot['steps']) + 1}",
+                    "name": data.get("tool_name", "tool"),
+                    "arguments": self._snapshot_tool_arguments(data.get("arguments", {})),
+                    "result": "",
+                }
+                self._append_step_if_needed(snapshot, tool_step)
+                snapshot["_active_tool_idx"] = len(snapshot["steps"]) - 1
+
+            elif event_type == "tool_execution_end":
+                idx = snapshot.get("_active_tool_idx", -1)
+                if idx >= 0 and idx < len(snapshot["steps"]):
+                    step = snapshot["steps"][idx]
+                    if step.get("type") == "tool":
+                        result = data.get("result", "")
+                        step["result"] = "" if result is None else str(result)
+                snapshot["_active_tool_idx"] = -1
+
+            elif event_type == "message_end":
+                if data.get("tool_calls") and snapshot.get("assistant_text", "").strip():
+                    self._append_step_if_needed(snapshot, {
+                        "type": "content",
+                        "content": snapshot["assistant_text"].strip(),
+                    })
+                    snapshot["assistant_text"] = ""
+
+            snapshot["updated_at"] = int(time.time())
+
+    def _clear_inflight_turn(self, request_id: str):
+        with self._inflight_lock:
+            self.inflight_turns.pop(request_id, None)
+
+    def get_inflight_messages(self, session_id: str):
+        """
+        Return synthetic history messages for in-flight runs in this session.
+        These records are merged into /api/history page=1 so a browser refresh
+        can still show the ongoing turn before final DB persistence.
+        """
+        now = int(time.time())
+        expired_before = now - 7200  # 2 hours safety TTL for abandoned requests
+        pending = []
+
+        with self._inflight_lock:
+            stale_ids = [
+                rid for rid, snap in self.inflight_turns.items()
+                if int(snap.get("updated_at", 0)) < expired_before
+            ]
+            for rid in stale_ids:
+                self.inflight_turns.pop(rid, None)
+
+            snaps = [
+                dict(snap)
+                for snap in self.inflight_turns.values()
+                if str(snap.get("session_id", "")) == str(session_id)
+            ]
+
+        snaps.sort(key=lambda s: int(s.get("created_at", 0)))
+
+        for snap in snaps:
+            created_at = int(snap.get("created_at", now))
+            user_content = str(snap.get("user_content", "") or "").strip()
+            if user_content:
+                pending.append({
+                    "role": "user",
+                    "content": user_content,
+                    "created_at": created_at,
+                    "_inflight": True,
+                    "request_id": snap.get("request_id", ""),
+                })
+
+            steps = list(snap.get("steps", []))
+            active_reasoning = str(snap.get("_active_reasoning", "") or "").strip()
+            if active_reasoning:
+                steps.append({"type": "thinking", "content": active_reasoning})
+
+            assistant_text = str(snap.get("assistant_text", "") or "")
+            if steps or assistant_text.strip():
+                pending.append({
+                    "role": "assistant",
+                    "content": assistant_text,
+                    "steps": steps,
+                    "created_at": int(snap.get("updated_at", created_at)),
+                    "_inflight": True,
+                    "request_id": snap.get("request_id", ""),
+                })
+
+        return pending
 
     def _generate_msg_id(self):
         """生成唯一的消息ID"""
@@ -204,6 +357,7 @@ class WebChannel(ChatChannel):
                     "request_id": request_id,
                     "timestamp": time.time()
                 })
+                self._clear_inflight_turn(request_id)
                 logger.debug(f"SSE done sent for request {request_id}")
                 return
 
@@ -232,6 +386,7 @@ class WebChannel(ChatChannel):
             q = self.sse_queues[request_id]
             event_type = event.get("type")
             data = event.get("data", {})
+            self._update_inflight_turn(request_id, event_type, data)
 
             if event_type == "reasoning_update":
                 delta = data.get("delta", "")
@@ -288,6 +443,7 @@ class WebChannel(ChatChannel):
                         "request_id": request_id,
                         "timestamp": time.time(),
                     })
+                    self._clear_inflight_turn(request_id)
 
             elif event_type == "file_to_send":
                 file_path = data.get("path", "")
@@ -458,9 +614,17 @@ class WebChannel(ChatChannel):
             if use_sse:
                 context["on_event"] = self._make_sse_callback(request_id)
 
+            resolved_session_key = str(context.get("session_id", session_id) or session_id)
+            self.request_to_session[request_id] = resolved_session_key
+            if use_sse:
+                self._init_inflight_turn(
+                    request_id=request_id,
+                    session_id=resolved_session_key,
+                    user_content=prompt,
+                )
+
             threading.Thread(target=self.produce, args=(context,)).start()
 
-            resolved_session_key = str(context.get("session_id", session_id) or session_id)
             resolved_agent_id, resolved_origin_session_id = _split_agent_session_id(resolved_session_key)
             return json.dumps({
                 "status": "success",
@@ -2249,13 +2413,27 @@ class HistoryHandler:
             if not session_id:
                 return json.dumps({"status": "error", "message": "session_id required"})
 
+            page = int(params.page)
+            page_size = int(params.page_size)
+
             from agent.memory import get_conversation_store
             store = get_conversation_store()
             result = store.load_history_page(
                 session_id=session_id,
-                page=int(params.page),
-                page_size=int(params.page_size),
+                page=page,
+                page_size=page_size,
             )
+
+            # The DB persists a turn after completion. During streaming, keep a
+            # volatile in-memory snapshot so refresh can still render the turn.
+            if page == 1:
+                inflight_messages = WebChannel().get_inflight_messages(session_id)
+                if inflight_messages:
+                    merged = list(result.get("messages", [])) + inflight_messages
+                    if len(merged) > page_size:
+                        merged = merged[-page_size:]
+                    result["messages"] = merged
+
             return json.dumps({"status": "success", **result}, ensure_ascii=False)
         except Exception as e:
             logger.error(f"[WebChannel] History API error: {e}")

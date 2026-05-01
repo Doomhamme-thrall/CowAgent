@@ -2244,7 +2244,8 @@ function loadHistory(page) {
             data.messages.forEach(msg => {
                 const hasContent = msg.content && msg.content.trim();
                 const hasToolCalls = msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0;
-                if (!hasContent && !hasToolCalls) return;
+                const hasSteps = msg.role === 'assistant' && msg.steps && msg.steps.length > 0;
+                if (!hasContent && !hasToolCalls && !hasSteps) return;
 
                 // Assign slot IDs: each user turn starts a new slot; the following
                 // assistant turn shares the same slot ID.
@@ -2268,6 +2269,9 @@ function loadHistory(page) {
                 const el = msg.role === 'user'
                     ? createUserMessageEl(msg.content, ts, null, msgSlotId)
                     : createBotMessageEl(msg.content || '', ts, null, msg, msgSlotId);
+                if (msg._inflight) {
+                    el.dataset.inflight = '1';
+                }
                 fragment.appendChild(el);
             });
 
@@ -2302,6 +2306,20 @@ function loadHistory(page) {
             historyPage = page;
 
             if (isFirstLoad) {
+                // Rebuild swap history from persisted turns only.
+                // In-flight synthetic rows are transient and should not enter version history.
+                Object.keys(messageSwaps).forEach(k => delete messageSwaps[k]);
+                Object.keys(swapCurrentIdx).forEach(k => delete swapCurrentIdx[k]);
+                const loadedSlots = new Set();
+                messagesDiv.querySelectorAll('[data-slot-id][data-msg-role="assistant"]').forEach(botEl => {
+                    if (botEl.dataset.inflight === '1') return;
+                    const slot = botEl.dataset.slotId;
+                    if (!slot || loadedSlots.has(slot)) return;
+                    loadedSlots.add(slot);
+                    _recordSwapVersion(slot);
+                    _refreshSwapNav(slot, botEl);
+                });
+
                 // Use requestAnimationFrame to ensure the DOM has fully rendered
                 // before scrolling, otherwise scrollHeight may not reflect new content.
                 requestAnimationFrame(() => scrollChatToBottom());
