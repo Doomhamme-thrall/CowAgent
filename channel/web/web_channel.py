@@ -388,12 +388,15 @@ class WebChannel(ChatChannel):
         """Build an on_event callback that pushes agent stream events into the SSE queue."""
 
         def on_event(event: dict):
+            event_type = event.get("type")
+            data = event.get("data", {})
+            # Always update the inflight snapshot so a browser refresh can
+            # restore the turn even after the SSE queue is gone.
+            self._update_inflight_turn(request_id, event_type, data)
+
             if request_id not in self.sse_queues:
                 return
             q = self.sse_queues[request_id]
-            event_type = event.get("type")
-            data = event.get("data", {})
-            self._update_inflight_turn(request_id, event_type, data)
 
             if event_type == "reasoning_update":
                 delta = data.get("delta", "")
