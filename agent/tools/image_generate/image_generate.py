@@ -220,7 +220,7 @@ class ImageGenerate(BaseTool):
             payload["size"] = size
         if image:
             payload["image"] = image
-            payload["output_format"] = output_format or "png"
+            # payload["output_format"] = output_format or "png"
             payload["watermark"] = watermark
 
         headers = {
