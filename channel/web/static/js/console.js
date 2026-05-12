@@ -1426,8 +1426,8 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, slotId) {
         if (slotId) botEl.dataset.slotId = slotId;
         botEl.innerHTML = `
             <img src="assets/logo.jpg" alt="CowAgent" class="w-8 h-8 rounded-lg flex-shrink-0">
-            <div class="min-w-0 flex-1 max-w-[85%]">
-                <div class="bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-2xl px-4 py-3 text-sm leading-relaxed msg-content text-slate-700 dark:text-slate-200">
+            <div class="min-w-0 w-fit max-w-[85%]">
+                <div class="bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-2xl px-4 py-2.5 text-sm leading-relaxed msg-content text-slate-700 dark:text-slate-200">
                     <div class="agent-steps"></div>
                     <div class="answer-content sse-streaming"></div>
                     <div class="media-content"></div>
@@ -1944,7 +1944,7 @@ function createBotMessageEl(content, timestamp, requestId, msg, slotId) {
 
     el.innerHTML = `
         <img src="assets/logo.jpg" alt="CowAgent" class="w-8 h-8 rounded-lg flex-shrink-0">
-        <div class="min-w-0 flex-1 max-w-[85%]">
+        <div class="min-w-0 w-fit max-w-[85%]">
             <div class="bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-2xl px-4 py-2.5 text-sm leading-relaxed msg-content text-slate-700 dark:text-slate-200">${stepsHtml ? `<div class="agent-steps">${stepsHtml}</div>` : ''}<div class="answer-content">${renderMarkdown(displayContent)}</div><div class="answer-meta" style="display:none"></div></div>
             <div class="flex items-center gap-2 mt-1.5">
                 <span class="text-xs text-slate-400 dark:text-slate-500">${formatTime(timestamp)}</span>
