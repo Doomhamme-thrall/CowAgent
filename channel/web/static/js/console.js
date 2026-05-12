@@ -101,6 +101,7 @@ const I18N = {
         confirm_yes: '确认',
         confirm_cancel: '取消',
         error_send: '发送失败，请稍后再试。', error_timeout: '请求超时，请再试一次。',
+        generation_stopped: '已停止生成',
         thinking_in_progress: '思考中...', thinking_done: '已深度思考', thinking_duration: '耗时',
         meta_model: '模型', meta_tokens: 'Token', meta_chars: '字数', meta_ttfb: '首字延迟',
         retry: '重试', edit_message: '编辑', edit_submit: '提交',
@@ -218,6 +219,7 @@ const I18N = {
         confirm_yes: 'Confirm',
         confirm_cancel: 'Cancel',
         error_send: 'Failed to send. Please try again.', error_timeout: 'Request timeout. Please try again.',
+        generation_stopped: 'Generation stopped',
         thinking_in_progress: 'Thinking...', thinking_done: 'Thought', thinking_duration: 'Duration',
         meta_model: 'Model', meta_tokens: 'Tokens', meta_chars: 'Chars', meta_ttfb: 'First token',
         retry: 'Retry', edit_message: 'Edit', edit_submit: 'Submit',
@@ -521,6 +523,7 @@ let isPolling = false;
 let pollGeneration = 0;   // incremented on each restart to cancel stale poll loops
 let loadingContainers = {};
 let activeStreams = {};   // request_id -> EventSource
+let currentRequestId = null;  // request_id of the currently streaming response
 let isComposing = false;
 let appConfig = { use_agent: false, title: 'CowAgent', subtitle: '', providers: {}, api_bases: {} };
 let availableAgents = [];
@@ -892,6 +895,7 @@ startPolling();
 
 const chatInput = document.getElementById('chat-input');
 const sendBtn = document.getElementById('send-btn');
+const stopBtn = document.getElementById('stop-btn');
 const messagesDiv = document.getElementById('chat-messages');
 const fileInput = document.getElementById('file-input');
 
@@ -938,6 +942,68 @@ let historySavedDraft = '';
 
 function updateSendBtnState() {
     sendBtn.disabled = uploadingCount > 0 || (!chatInput.value.trim() && pendingAttachments.length === 0);
+}
+
+/** Show or hide the stop button during streaming responses. */
+function showStopBtn() {
+    sendBtn.style.display = 'none';
+    stopBtn.style.display = '';
+}
+function hideStopBtn() {
+    stopBtn.style.display = 'none';
+    sendBtn.style.display = '';
+    updateSendBtnState();
+}
+
+/** Called when user clicks stop button to abort ongoing generation. */
+function stopGeneration() {
+    const rid = currentRequestId;
+    if (!rid) return;
+
+    // Notify backend to stop
+    fetch('/api/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ request_id: rid }),
+    }).catch(() => {});
+
+    // Close SSE connection
+    const es = activeStreams[rid];
+    if (es) {
+        es.close();
+        delete activeStreams[rid];
+    }
+
+    // Remove loading indicator if present
+    if (loadingContainers[rid]) {
+        loadingContainers[rid].remove();
+        delete loadingContainers[rid];
+    }
+
+    currentRequestId = null;
+    hideStopBtn();
+
+    // Send an abort message as the bot response
+    const slotId = document.querySelector(`[data-slot-id]:has(div.flex-col)`);
+    const lastUserMsg = messagesDiv.querySelector('[data-msg-role="user"]:last-child');
+    let lastSlotId = '';
+    if (lastUserMsg) lastSlotId = lastUserMsg.dataset.slotId || '';
+    // Try finding slot from the latest bot element that is empty/loading
+    const abortedEl = document.createElement('div');
+    abortedEl.className = 'flex gap-3 px-4 sm:px-6 py-3 msg-row';
+    abortedEl.dataset.msgRole = 'assistant';
+    const now = new Date();
+    abortedEl.innerHTML = `
+        <img src="assets/logo.jpg" alt="CowAgent" class="w-8 h-8 rounded-lg flex-shrink-0">
+        <div class="min-w-0 flex-1 max-w-[85%]">
+            <div class="bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-2xl px-4 py-2.5 text-sm leading-relaxed msg-content text-slate-700 dark:text-slate-200"><div class="answer-content"><p style="color:#94a3b8"><i>${t('generation_stopped')}</i></p></div></div>
+            <div class="flex items-center gap-2 mt-1.5">
+                <span class="text-xs text-slate-400 dark:text-slate-500">${formatTime(now)}</span>
+            </div>
+        </div>
+    `;
+    messagesDiv.appendChild(abortedEl);
+    scrollChatToBottom();
 }
 
 function renderAttachmentPreview() {
@@ -1457,6 +1523,8 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, slotId) {
     function connect() {
         const es = new EventSource(`/stream?request_id=${encodeURIComponent(requestId)}`);
         activeStreams[requestId] = es;
+        currentRequestId = requestId;
+        showStopBtn();
 
         es.onmessage = function(e) {
             let item;
@@ -1622,6 +1690,8 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, slotId) {
                 done = true;
                 es.close();
                 delete activeStreams[requestId];
+                currentRequestId = null;
+                hideStopBtn();
 
                 // item.content may be empty when "done" is only a stream-close signal after media.
                 const finalText = item.content || accumulatedText;
@@ -1661,6 +1731,8 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, slotId) {
                 done = true;
                 es.close();
                 delete activeStreams[requestId];
+                currentRequestId = null;
+                hideStopBtn();
                 if (loadingEl) { loadingEl.remove(); loadingEl = null; }
                 addBotMessage(t('error_send'), new Date(), null, null, slotId);
             }
@@ -1687,6 +1759,8 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, slotId) {
             }
 
             // Exhausted retries, show whatever we have
+            currentRequestId = null;
+            hideStopBtn();
             if (loadingEl) { loadingEl.remove(); loadingEl = null; }
             if (!botEl) {
                 addBotMessage(t('error_send'), new Date());
@@ -2416,6 +2490,8 @@ function newChat() {
     // Close all active SSE connections for the current session
     Object.values(activeStreams).forEach(es => { try { es.close(); } catch (_) {} });
     activeStreams = {};
+    currentRequestId = null;
+    hideStopBtn();
 
     // Generate a fresh session and persist it so the next page load also starts clean
     selectedAgentId = _normalizeAgentId(selectedAgentId || _getDefaultAgentId());

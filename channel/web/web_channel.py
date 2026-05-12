@@ -131,6 +131,7 @@ class WebChannel(ChatChannel):
         self.session_queues = {}  # session_id -> Queue (fallback polling)
         self.request_to_session = {}  # request_id -> session_id
         self.sse_queues = {}  # request_id -> Queue (SSE streaming)
+        self.cancel_events = {}  # request_id -> threading.Event (stop signal)
         self.inflight_turns = {}  # request_id -> in-flight turn snapshot for refresh restore
         self._inflight_lock = threading.Lock()
         self._http_server = None
@@ -390,6 +391,12 @@ class WebChannel(ChatChannel):
         def on_event(event: dict):
             event_type = event.get("type")
             data = event.get("data", {})
+
+            # Check if this request has been cancelled (user clicked stop)
+            cancel_ev = self.cancel_events.get(request_id)
+            if cancel_ev and cancel_ev.is_set():
+                return
+
             # Always update the inflight snapshot so a browser refresh can
             # restore the turn even after the SSE queue is gone.
             self._update_inflight_turn(request_id, event_type, data)
@@ -473,6 +480,21 @@ class WebChannel(ChatChannel):
                 })
 
         return on_event
+
+    def stop_stream(self):
+        """Handle client stop request: set the cancel event for a request_id."""
+        try:
+            data = web.data()
+            json_data = json.loads(data)
+            request_id = json_data.get("request_id", "")
+            if request_id and request_id in self.cancel_events:
+                self.cancel_events[request_id].set()
+                logger.info(f"[WebChannel] Stop requested for request {request_id}")
+                return json.dumps({"status": "success"})
+            return json.dumps({"status": "error", "message": "request_id not found"})
+        except Exception as e:
+            logger.error(f"[WebChannel] Error in stop_stream: {e}")
+            return json.dumps({"status": "error", "message": str(e)})
 
     def upload_file(self):
         """Handle file upload via multipart/form-data. Save to workspace/tmp/ and return metadata."""
@@ -559,6 +581,7 @@ class WebChannel(ChatChannel):
 
             if use_sse:
                 self.sse_queues[request_id] = Queue()
+                self.cancel_events[request_id] = threading.Event()
 
             trigger_prefixs = conf().get("single_chat_prefix", [""])
             if check_prefix(prompt, trigger_prefixs) is None:
@@ -666,12 +689,19 @@ class WebChannel(ChatChannel):
             return
 
         q = self.sse_queues[request_id]
+        cancel_ev = self.cancel_events.get(request_id)
         idle_timeout = 600  # 10 minutes without any real event
         deadline = time.time() + idle_timeout
         done = False
 
         try:
             while time.time() < deadline:
+                # Check cancellation (user clicked stop)
+                if cancel_ev and cancel_ev.is_set():
+                    yield b"data: {\"type\": \"canceled\"}\n\n"
+                    self.sse_queues.pop(request_id, None)
+                    return
+
                 try:
                     item = q.get(timeout=1)
                 except Empty:
@@ -688,6 +718,7 @@ class WebChannel(ChatChannel):
                     done = True
                     break
         finally:
+            self.cancel_events.pop(request_id, None)
             if done:
                 self.sse_queues.pop(request_id, None)
 
@@ -789,6 +820,7 @@ class WebChannel(ChatChannel):
             '/api/version', 'VersionHandler',
             '/api/models/(.*)', 'ModelDetailHandler',
             '/api/models', 'ModelsHandler',
+            '/api/stop', 'StopHandler',
             '/assets/(.*)', 'AssetsHandler',
         )
         app = web.application(urls, globals(), autoreload=False)
@@ -951,6 +983,12 @@ class StreamHandler:
         web.header('Access-Control-Allow-Origin', '*')
 
         return WebChannel().stream_response(request_id)
+
+
+class StopHandler:
+    def POST(self):
+        _require_auth()
+        return WebChannel().stop_stream()
 
 
 class ChatHandler:
