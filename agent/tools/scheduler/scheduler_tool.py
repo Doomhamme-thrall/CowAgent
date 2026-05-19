@@ -24,6 +24,7 @@ class SchedulerTool(BaseTool):
         "⚠️ 重要：仅当需要「定时/提醒/每天/每周/X分钟后/X点」等延迟或周期执行时才使用此工具。"
         "使用方法：\n"
         "- 创建：action='create', name='任务名', message/ai_task='内容', schedule_type='once/interval/cron', schedule_value='...'\n"
+        "- 编辑：action='update', task_id='任务ID', 可选修改 name/message/ai_task/schedule/enabled 等字段\n"
         "- 查询：action='list' / action='get', task_id='任务ID'\n"
         "- 管理：action='delete/enable/disable', task_id='任务ID'\n\n"
         "调度类型：\n"
@@ -37,12 +38,12 @@ class SchedulerTool(BaseTool):
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["create", "list", "get", "delete", "enable", "disable"],
-                "description": "操作类型: create(创建), list(列表), get(查询), delete(删除), enable(启用), disable(禁用)"
+                    "enum": ["create", "update", "list", "get", "delete", "enable", "disable"],
+                    "description": "操作类型: create(创建), update(编辑), list(列表), get(查询), delete(删除), enable(启用), disable(禁用)"
             },
             "task_id": {
                 "type": "string",
-                "description": "任务ID (用于 get/delete/enable/disable 操作)"
+                    "description": "任务ID (用于 get/update/delete/enable/disable 操作)"
             },
             "name": {
                 "type": "string",
@@ -99,6 +100,9 @@ class SchedulerTool(BaseTool):
         try:
             if action == "create":
                 result = self._create_task(**kwargs)
+                return ToolResult.success(result)
+            elif action == "update":
+                result = self._update_task(**kwargs)
                 return ToolResult.success(result)
             elif action == "list":
                 result = self._list_tasks(**kwargs)
@@ -285,6 +289,95 @@ class SchedulerTool(BaseTool):
         
         self.task_store.delete_task(task_id)
         return f"✅ 任务 '{task['name']}' ({task_id}) 已删除"
+
+    def _update_task(self, **kwargs) -> str:
+        """Update an existing task"""
+        task_id = kwargs.get("task_id")
+        if not task_id:
+            return "错误: 缺少任务ID (task_id)"
+
+        task = self.task_store.get_task(task_id)
+        if not task:
+            return f"错误: 任务 '{task_id}' 不存在"
+
+        updates = {}
+
+        name = kwargs.get("name")
+        if name:
+            updates["name"] = name
+
+        if "enabled" in kwargs and kwargs.get("enabled") is not None:
+            updates["enabled"] = bool(kwargs.get("enabled"))
+
+        schedule = None
+        schedule_type = kwargs.get("schedule_type")
+        schedule_value = kwargs.get("schedule_value")
+        if schedule_type or schedule_value:
+            if not schedule_type or not schedule_value:
+                return "错误: 修改调度时必须同时提供 schedule_type 和 schedule_value"
+            schedule = self._parse_schedule(schedule_type, schedule_value)
+            if not schedule:
+                return f"错误: 无效的调度配置 - type: {schedule_type}, value: {schedule_value}"
+            updates["schedule"] = schedule
+
+        message = kwargs.get("message")
+        ai_task = kwargs.get("ai_task")
+        action_type = kwargs.get("action_type")
+        content = kwargs.get("content")
+
+        if action_type or content is not None or message is not None or ai_task is not None:
+            if message is not None and ai_task is not None:
+                return "错误: message 和 ai_task 只能提供其中一个"
+
+            if not action_type:
+                action_type = "send_message" if message is not None or ai_task is None else "agent_task"
+
+            action = {
+                "type": action_type,
+                "receiver": kwargs.get("receiver", task.get("action", {}).get("receiver")),
+                "receiver_name": kwargs.get("receiver_name", task.get("action", {}).get("receiver_name")),
+                "is_group": bool(kwargs.get("is_group", task.get("action", {}).get("is_group", False))),
+                "channel_type": kwargs.get("channel_type", task.get("action", {}).get("channel_type", "unknown")),
+            }
+
+            if action_type == "agent_task":
+                task_description = ai_task if ai_task is not None else content
+                if not task_description:
+                    return "错误: AI任务缺少内容"
+                action["task_description"] = task_description
+                if task.get("action", {}).get("dingtalk_sender_staff_id"):
+                    action["dingtalk_sender_staff_id"] = task["action"]["dingtalk_sender_staff_id"]
+            else:
+                message_content = message if message is not None else content
+                if not message_content:
+                    return "错误: 固定消息缺少内容"
+                action["content"] = message_content
+
+            updates["action"] = action
+
+        if not updates:
+            return f"✅ 任务 '{task['name']}' ({task_id}) 无需修改"
+
+        if schedule:
+            next_run = self._calculate_next_run({"schedule": schedule})
+            updates["next_run_at"] = next_run.isoformat() if next_run else None
+
+        self.task_store.update_task(task_id, updates)
+
+        updated = self.task_store.get_task(task_id) or task
+        schedule_desc = self._format_schedule_description(updated.get("schedule", {}))
+        receiver_desc = updated.get("action", {}).get("receiver_name") or updated.get("action", {}).get("receiver")
+        next_run = updated.get("next_run_at")
+        next_run_str = datetime.fromisoformat(next_run).strftime('%Y-%m-%d %H:%M:%S') if next_run else '未知'
+
+        return (
+            f"✅ 定时任务更新成功\n\n"
+            f"📋 任务ID: {task_id}\n"
+            f"📝 名称: {updated.get('name', task['name'])}\n"
+            f"⏰ 调度: {schedule_desc}\n"
+            f"👤 接收者: {receiver_desc}\n"
+            f"🕐 下次执行: {next_run_str}"
+        )
     
     def _enable_task(self, **kwargs) -> str:
         """Enable a task"""

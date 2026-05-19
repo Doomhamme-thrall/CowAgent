@@ -2250,20 +2250,243 @@ class MemoryContentHandler:
             return json.dumps({"status": "error", "message": str(e)})
 
 
+def _scheduler_store():
+    from agent.tools.scheduler.task_store import TaskStore
+    workspace_root = _get_workspace_root()
+    store_path = os.path.join(workspace_root, "scheduler", "tasks.json")
+    return TaskStore(store_path)
+
+
+def _scheduler_request_json():
+    raw = web.data()
+    if not raw:
+        return {}
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8")
+    raw = raw.strip()
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _scheduler_coerce_bool(value, default=None):
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in {"1", "true", "yes", "on", "y", "启用"}
+
+
+def _scheduler_parse_schedule(schedule_type: str, schedule_value: str):
+    from datetime import datetime, timedelta
+    from croniter import croniter
+    import re
+
+    if schedule_type == "cron":
+        croniter(schedule_value)
+        return {"type": "cron", "expression": schedule_value}
+
+    if schedule_type == "interval":
+        seconds = int(schedule_value)
+        if seconds <= 0:
+            raise ValueError("interval must be greater than 0")
+        return {"type": "interval", "seconds": seconds}
+
+    if schedule_type == "once":
+        if schedule_value.startswith("+"):
+            match = re.match(r"\+(\d+)([smhd])", schedule_value)
+            if not match:
+                raise ValueError("invalid relative time format")
+            amount = int(match.group(1))
+            unit = match.group(2)
+            now = datetime.now()
+            if unit == "s":
+                target_time = now + timedelta(seconds=amount)
+            elif unit == "m":
+                target_time = now + timedelta(minutes=amount)
+            elif unit == "h":
+                target_time = now + timedelta(hours=amount)
+            else:
+                target_time = now + timedelta(days=amount)
+            return {"type": "once", "run_at": target_time.isoformat()}
+
+        datetime.fromisoformat(schedule_value)
+        return {"type": "once", "run_at": schedule_value}
+
+    raise ValueError(f"unknown schedule type: {schedule_type}")
+
+
+def _scheduler_calculate_next_run(task: dict):
+    from datetime import datetime, timedelta
+    from croniter import croniter
+
+    schedule = task.get("schedule", {})
+    schedule_type = schedule.get("type")
+    now = datetime.now()
+
+    if schedule_type == "cron":
+        expression = schedule.get("expression")
+        return croniter(expression, now).get_next(datetime)
+    if schedule_type == "interval":
+        seconds = int(schedule.get("seconds", 0))
+        return now + timedelta(seconds=seconds)
+    if schedule_type == "once":
+        run_at_str = schedule.get("run_at")
+        return datetime.fromisoformat(run_at_str)
+    return None
+
+
+def _scheduler_build_task(payload: dict, existing_task: dict = None):
+    from datetime import datetime
+    import uuid
+
+    task = dict(existing_task or {})
+    now_iso = datetime.now().isoformat()
+
+    if not task.get("id"):
+        task["id"] = str(uuid.uuid4())[:8]
+
+    name = (payload.get("name") or task.get("name") or "").strip()
+    if not name:
+        raise ValueError("缺少任务名称")
+
+    schedule_type = payload.get("schedule_type") or task.get("schedule", {}).get("type")
+    schedule_value = payload.get("schedule_value")
+    if payload.get("schedule_type") or payload.get("schedule_value") or not existing_task:
+        if not schedule_type or not schedule_value:
+            raise ValueError("缺少调度类型或调度值")
+        schedule = _scheduler_parse_schedule(schedule_type, str(schedule_value).strip())
+        task["schedule"] = schedule
+
+    action_type = payload.get("action_type")
+    if not action_type and not existing_task:
+        action_type = "send_message"
+    if action_type or payload.get("content") is not None or payload.get("message") is not None or payload.get("ai_task") is not None:
+        action_type = action_type or task.get("action", {}).get("type") or "send_message"
+        receiver = str(payload.get("receiver", task.get("action", {}).get("receiver", "")) or "").strip()
+        receiver_name = str(payload.get("receiver_name", task.get("action", {}).get("receiver_name", "")) or "").strip()
+        channel_type = str(payload.get("channel_type") or task.get("action", {}).get("channel_type") or "web").strip()
+        is_group = _scheduler_coerce_bool(payload.get("is_group"), task.get("action", {}).get("is_group", False))
+
+        action = {
+            "type": action_type,
+            "receiver": receiver,
+            "receiver_name": receiver_name,
+            "is_group": bool(is_group),
+            "channel_type": channel_type,
+        }
+
+        if action_type == "agent_task":
+            task_description = payload.get("ai_task") or payload.get("content") or payload.get("message")
+            if not task_description:
+                raise ValueError("缺少 AI 任务内容")
+            action["task_description"] = str(task_description).strip()
+        else:
+            message = payload.get("message") or payload.get("content") or payload.get("ai_task")
+            if not message:
+                raise ValueError("缺少固定消息内容")
+            action["content"] = str(message).strip()
+
+        if task.get("action", {}).get("dingtalk_sender_staff_id"):
+            action["dingtalk_sender_staff_id"] = task["action"]["dingtalk_sender_staff_id"]
+
+        task["action"] = action
+
+    task["name"] = name
+    if payload.get("enabled") is not None:
+        task["enabled"] = _scheduler_coerce_bool(payload.get("enabled"), True)
+    elif not existing_task:
+        task["enabled"] = True
+
+    if not existing_task:
+        task["created_at"] = now_iso
+    task["updated_at"] = now_iso
+
+    if task.get("schedule"):
+        next_run = _scheduler_calculate_next_run(task)
+        if next_run:
+            task["next_run_at"] = next_run.isoformat()
+        elif not existing_task:
+            task["next_run_at"] = None
+
+    return task
+
+
 class SchedulerHandler:
     def GET(self):
         _require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
-            from agent.tools.scheduler.task_store import TaskStore
-            workspace_root = _get_workspace_root()
-            store_path = os.path.join(workspace_root, "scheduler", "tasks.json")
-            store = TaskStore(store_path)
+            store = _scheduler_store()
             tasks = store.list_tasks()
             return json.dumps({"status": "success", "tasks": tasks}, ensure_ascii=False)
         except Exception as e:
             logger.error(f"[WebChannel] Scheduler API error: {e}")
             return json.dumps({"status": "error", "message": str(e)})
+
+    def POST(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            payload = _scheduler_request_json()
+            store = _scheduler_store()
+            task = _scheduler_build_task(payload)
+            store.add_task(task)
+            return json.dumps({"status": "success", "task": task}, ensure_ascii=False)
+        except ValueError as e:
+            return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] Scheduler POST error: {e}")
+            return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
+
+    def PUT(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            payload = _scheduler_request_json()
+            task_id = str(payload.get("task_id") or payload.get("id") or "").strip()
+            if not task_id:
+                return json.dumps({"status": "error", "message": "task_id required"}, ensure_ascii=False)
+
+            store = _scheduler_store()
+            existing_task = store.get_task(task_id)
+            if not existing_task:
+                return json.dumps({"status": "error", "message": f"task '{task_id}' not found"}, ensure_ascii=False)
+
+            updated_task = _scheduler_build_task(payload, existing_task)
+            updated_task["id"] = task_id
+            if not updated_task.get("created_at"):
+                updated_task["created_at"] = existing_task.get("created_at")
+
+            store.update_task(task_id, updated_task)
+            return json.dumps({"status": "success", "task": store.get_task(task_id)}, ensure_ascii=False)
+        except ValueError as e:
+            return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] Scheduler PUT error: {e}")
+            return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
+
+    def DELETE(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            payload = _scheduler_request_json()
+            task_id = str(payload.get("task_id") or payload.get("id") or "").strip()
+            if not task_id:
+                return json.dumps({"status": "error", "message": "task_id required"}, ensure_ascii=False)
+
+            store = _scheduler_store()
+            store.delete_task(task_id)
+            return json.dumps({"status": "success"}, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] Scheduler DELETE error: {e}")
+            return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
 
 
 class SessionsHandler:

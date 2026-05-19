@@ -1102,6 +1102,11 @@
                                     <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100" data-i18n="tasks_title">定时任务</h2>
                                     <p class="text-sm text-slate-500 dark:text-slate-400 mt-1" data-i18n="tasks_desc">查看和管理定时任务</p>
                                 </div>
+                                <button type="button" onclick="openTaskModal()"
+                                        class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary-500 hover:bg-primary-600 text-white text-sm font-medium cursor-pointer transition-colors duration-150">
+                                    <i class="fas fa-plus text-xs"></i>
+                                    <span data-i18n="tasks_add">新增任务</span>
+                                </button>
                             </div>
                             <div id="tasks-empty" class="flex flex-col items-center justify-center py-20">
                                 <div class="w-16 h-16 rounded-2xl bg-rose-50 dark:bg-rose-900/20 flex items-center justify-center mb-4">
@@ -1110,6 +1115,100 @@
                                 <p class="text-slate-500 dark:text-slate-400 font-medium">Loading...</p>
                             </div>
                             <div id="tasks-list" class="grid gap-4 hidden"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Task Modal -->
+                <div id="task-modal-overlay" class="fixed inset-0 bg-black/50 z-[100] hidden flex items-center justify-center"
+                     onclick="if(event.target===this)closeTaskModal()">
+                    <div class="bg-white dark:bg-[#1A1A1A] rounded-2xl border border-slate-200 dark:border-white/10 shadow-xl w-full max-w-2xl mx-4 overflow-hidden">
+                        <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-white/10">
+                            <h3 id="task-modal-title" class="font-semibold text-slate-800 dark:text-slate-100 text-base" data-i18n="tasks_add">新增任务</h3>
+                            <button onclick="closeTaskModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 cursor-pointer">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        </div>
+                        <div class="p-6 space-y-4">
+                            <input type="hidden" id="task-modal-id">
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5" data-i18n="tasks_field_name">任务名称</label>
+                                    <input id="task-modal-name" type="text"
+                                           class="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-white/5 text-sm text-slate-800 dark:text-slate-100 focus:outline-none focus:border-primary-500 transition-colors"
+                                           placeholder="每日上午提醒">
+                                </div>
+                                <div class="flex items-center justify-between gap-3 pt-6 md:pt-0">
+                                    <label class="flex items-center gap-2 text-sm font-medium text-slate-600 dark:text-slate-400">
+                                        <input id="task-modal-enabled" type="checkbox" class="rounded border-slate-300 text-primary-500 focus:ring-primary-400">
+                                        <span data-i18n="tasks_enabled">启用任务</span>
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5" data-i18n="tasks_field_action_type">任务类型</label>
+                                    <select id="task-modal-action-type" class="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-white/5 text-sm text-slate-800 dark:text-slate-100 focus:outline-none focus:border-primary-500 transition-colors">
+                                        <option value="send_message" data-i18n="tasks_action_message">固定消息</option>
+                                        <option value="agent_task" data-i18n="tasks_action_ai">AI 任务</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5" data-i18n="tasks_field_channel">通道类型</label>
+                                    <select id="task-modal-channel-type" class="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-white/5 text-sm text-slate-800 dark:text-slate-100 focus:outline-none focus:border-primary-500 transition-colors">
+                                        <option value="web">web</option>
+                                        <option value="qq">qq</option>
+                                        <option value="wecom_bot">wecom_bot</option>
+                                        <option value="dingtalk">dingtalk</option>
+                                        <option value="feishu">feishu</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div>
+                                <label id="task-modal-content-label" class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5" data-i18n="tasks_field_content">消息内容</label>
+                                <textarea id="task-modal-content" rows="4"
+                                          class="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-white/5 text-sm text-slate-800 dark:text-slate-100 focus:outline-none focus:border-primary-500 transition-colors resize-y"
+                                          placeholder="例如：提醒我检查服务器"></textarea>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5" data-i18n="tasks_field_schedule_type">调度类型</label>
+                                    <select id="task-modal-schedule-type" class="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-white/5 text-sm text-slate-800 dark:text-slate-100 focus:outline-none focus:border-primary-500 transition-colors">
+                                        <option value="once" data-i18n="tasks_schedule_once">一次性</option>
+                                        <option value="interval" data-i18n="tasks_schedule_interval">固定间隔</option>
+                                        <option value="cron" data-i18n="tasks_schedule_cron">Cron</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5" data-i18n="tasks_field_schedule_value">调度值</label>
+                                    <input id="task-modal-schedule-value" type="text"
+                                           class="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-white/5 text-sm text-slate-800 dark:text-slate-100 focus:outline-none focus:border-primary-500 transition-colors"
+                                           placeholder="+10m / 3600 / 0 8 * * *">
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5" data-i18n="tasks_field_receiver">接收者</label>
+                                    <input id="task-modal-receiver" type="text"
+                                           class="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-white/5 text-sm text-slate-800 dark:text-slate-100 focus:outline-none focus:border-primary-500 transition-colors"
+                                           placeholder="session 或聊天对象 ID">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5" data-i18n="tasks_field_receiver_name">接收者名称</label>
+                                    <input id="task-modal-receiver-name" type="text"
+                                           class="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-white/5 text-sm text-slate-800 dark:text-slate-100 focus:outline-none focus:border-primary-500 transition-colors"
+                                           placeholder="当前会话">
+                                </div>
+                            </div>
+                            <p class="text-xs text-slate-400 dark:text-slate-500" data-i18n="tasks_schedule_hint">一次性任务支持 +5m / +1h / ISO 时间；间隔任务填写秒数；Cron 填表达式。</p>
+                        </div>
+                        <div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-100 dark:border-white/5">
+                            <button type="button" onclick="closeTaskModal()"
+                                    class="px-4 py-2 rounded-lg border border-slate-200 dark:border-white/10 text-slate-600 dark:text-slate-300 text-sm font-medium hover:bg-slate-50 dark:hover:bg-white/5 cursor-pointer transition-colors"
+                                    data-i18n="confirm_cancel">取消</button>
+                            <button type="button" onclick="saveTask()"
+                                    class="px-4 py-2 rounded-lg bg-primary-500 hover:bg-primary-600 text-white text-sm font-medium cursor-pointer transition-colors"
+                                    data-i18n="config_save">保存</button>
                         </div>
                     </div>
                 </div>

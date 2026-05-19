@@ -85,6 +85,16 @@ const I18N = {
         wecom_scan_fail: '创建失败',
         wecom_mode_scan: '扫码接入', wecom_mode_manual: '手动填写',
         tasks_title: '定时任务', tasks_desc: '查看和管理定时任务',
+        tasks_add: '新增任务', tasks_enabled: '启用任务',
+        tasks_field_name: '任务名称', tasks_field_action_type: '任务类型',
+        tasks_action_message: '固定消息', tasks_action_ai: 'AI 任务',
+        tasks_field_channel: '通道类型', tasks_field_content: '消息内容',
+        tasks_field_schedule_type: '调度类型', tasks_schedule_once: '一次性',
+        tasks_schedule_interval: '固定间隔', tasks_schedule_cron: 'Cron',
+        tasks_field_schedule_value: '调度值', tasks_field_receiver: '接收者',
+        tasks_field_receiver_name: '接收者名称', tasks_schedule_hint: '一次性任务支持 +5m / +1h / ISO 时间；间隔任务填写秒数；Cron 填表达式。',
+        tasks_status_enabled: '已启用', tasks_status_disabled: '已停用',
+        tasks_edit: '编辑任务', tasks_delete: '删除任务', tasks_enable: '启用', tasks_disable: '停用',
         tasks_coming: '即将推出', tasks_coming_desc: '定时任务管理功能即将在此提供',
         logs_title: '日志', logs_desc: '实时日志输出 (run.log)',
         logs_live: '实时', logs_coming_msg: '日志流即将在此提供。将连接 run.log 实现类似 tail -f 的实时输出。',
@@ -203,6 +213,16 @@ const I18N = {
         wecom_scan_fail: 'Bot creation failed',
         wecom_mode_scan: 'Scan QR', wecom_mode_manual: 'Manual',
         tasks_title: 'Scheduled Tasks', tasks_desc: 'View and manage scheduled tasks',
+        tasks_add: 'Add Task', tasks_enabled: 'Enable task',
+        tasks_field_name: 'Task Name', tasks_field_action_type: 'Task Type',
+        tasks_action_message: 'Message', tasks_action_ai: 'AI Task',
+        tasks_field_channel: 'Channel Type', tasks_field_content: 'Content',
+        tasks_field_schedule_type: 'Schedule Type', tasks_schedule_once: 'Once',
+        tasks_schedule_interval: 'Interval', tasks_schedule_cron: 'Cron',
+        tasks_field_schedule_value: 'Schedule Value', tasks_field_receiver: 'Receiver',
+        tasks_field_receiver_name: 'Receiver Name', tasks_schedule_hint: 'Once supports +5m / +1h / ISO time; interval uses seconds; cron uses an expression.',
+        tasks_status_enabled: 'Enabled', tasks_status_disabled: 'Disabled',
+        tasks_edit: 'Edit Task', tasks_delete: 'Delete Task', tasks_enable: 'Enable', tasks_disable: 'Disable',
         tasks_coming: 'Coming Soon', tasks_coming_desc: 'Scheduled task management will be available here',
         logs_title: 'Logs', logs_desc: 'Real-time log output (run.log)',
         logs_live: 'Live', logs_coming_msg: 'Log streaming will be available here. Connects to run.log for real-time output similar to tail -f.',
@@ -4972,48 +4992,258 @@ document.addEventListener('DOMContentLoaded', function() {
 // Scheduler View
 // =====================================================================
 let tasksLoaded = false;
-function loadTasksView() {
-    if (tasksLoaded) return;
+let tasksCache = [];
+let taskModalBound = false;
+
+function _taskText(zhText, enText) {
+    return currentLang === 'zh' ? zhText : enText;
+}
+
+function _formatTaskSchedule(task) {
+    const schedule = task.schedule || {};
+    if (schedule.type === 'cron') return `${_taskText('Cron', 'Cron')}: ${schedule.expression || '--'}`;
+    if (schedule.type === 'interval') {
+        const seconds = Number(schedule.seconds || 0);
+        if (seconds >= 86400) return _taskText(`每 ${Math.floor(seconds / 86400)} 天`, `Every ${Math.floor(seconds / 86400)} day(s)`);
+        if (seconds >= 3600) return _taskText(`每 ${Math.floor(seconds / 3600)} 小时`, `Every ${Math.floor(seconds / 3600)} hour(s)`);
+        if (seconds >= 60) return _taskText(`每 ${Math.floor(seconds / 60)} 分钟`, `Every ${Math.floor(seconds / 60)} minute(s)`);
+        return _taskText(`每 ${seconds} 秒`, `Every ${seconds} second(s)`);
+    }
+    if (schedule.type === 'once') {
+        const runAt = schedule.run_at || '';
+        const d = runAt ? new Date(runAt) : null;
+        if (d && !isNaN(d.getTime())) {
+            return _taskText(`一次性 (${d.toLocaleString()})`, `Once (${d.toLocaleString()})`);
+        }
+        return _taskText('一次性', 'Once');
+    }
+    return '--';
+}
+
+function _formatTaskNextRun(task) {
+    if (!task.next_run_at) return '--';
+    const d = new Date(task.next_run_at);
+    return isNaN(d.getTime()) ? '--' : d.toLocaleString();
+}
+
+function _formatTaskAction(task) {
+    const action = task.action || {};
+    if (action.type === 'agent_task') return _taskText('AI 任务', 'AI Task');
+    if (action.type === 'send_message') return _taskText('固定消息', 'Message');
+    return action.type || '--';
+}
+
+function _setTaskModalMode(actionType) {
+    const contentLabel = document.getElementById('task-modal-content-label');
+    const contentInput = document.getElementById('task-modal-content');
+    const scheduleType = document.getElementById('task-modal-schedule-type');
+    const scheduleValue = document.getElementById('task-modal-schedule-value');
+    const title = document.getElementById('task-modal-title');
+
+    if (actionType === 'agent_task') {
+        contentLabel.textContent = t('tasks_field_content');
+        contentInput.placeholder = _taskText('例如：汇总今天的进展并生成提醒', 'For example: summarize today\'s progress and generate a reminder');
+    } else {
+        contentLabel.textContent = t('tasks_field_content');
+        contentInput.placeholder = _taskText('例如：提醒我检查服务器', 'For example: remind me to check the server');
+    }
+
+    const scheduleTypeVal = scheduleType.value || 'once';
+    if (scheduleTypeVal === 'cron') {
+        scheduleValue.placeholder = '0 8 * * *';
+    } else if (scheduleTypeVal === 'interval') {
+        scheduleValue.placeholder = '3600';
+    } else {
+        scheduleValue.placeholder = '+10m / 2026-05-20T08:00:00';
+    }
+
+    if (title && title.dataset.mode === 'edit') {
+        title.textContent = t('tasks_edit');
+    } else if (title) {
+        title.textContent = t('tasks_add');
+    }
+}
+
+function _bindTaskModalEvents() {
+    if (taskModalBound) return;
+    const actionSelect = document.getElementById('task-modal-action-type');
+    const scheduleSelect = document.getElementById('task-modal-schedule-type');
+    actionSelect.addEventListener('change', () => _setTaskModalMode(actionSelect.value));
+    scheduleSelect.addEventListener('change', () => _setTaskModalMode(actionSelect.value));
+    taskModalBound = true;
+}
+
+function openTaskModal(taskId = '') {
+    _bindTaskModalEvents();
+
+    const modal = document.getElementById('task-modal-overlay');
+    const title = document.getElementById('task-modal-title');
+    const task = taskId ? tasksCache.find(t => String(t.id) === String(taskId)) : null;
+
+    title.dataset.mode = task ? 'edit' : 'add';
+    title.textContent = task ? t('tasks_edit') : t('tasks_add');
+
+    document.getElementById('task-modal-id').value = task ? (task.id || '') : '';
+    document.getElementById('task-modal-name').value = task ? (task.name || '') : '';
+    document.getElementById('task-modal-enabled').checked = task ? task.enabled !== false : true;
+    document.getElementById('task-modal-action-type').value = task && task.action && task.action.type === 'agent_task' ? 'agent_task' : 'send_message';
+    document.getElementById('task-modal-channel-type').value = task && task.action && task.action.channel_type ? task.action.channel_type : 'web';
+    document.getElementById('task-modal-content').value = task ? ((task.action && (task.action.content || task.action.task_description)) || '') : '';
+    document.getElementById('task-modal-schedule-type').value = task && task.schedule && task.schedule.type ? task.schedule.type : 'once';
+    document.getElementById('task-modal-schedule-value').value = task && task.schedule ? (task.schedule.expression || task.schedule.seconds || task.schedule.run_at || '') : '';
+    document.getElementById('task-modal-receiver').value = task && task.action ? (task.action.receiver || '') : (sessionId || '');
+    document.getElementById('task-modal-receiver-name').value = task && task.action ? (task.action.receiver_name || '') : (sessionId || '');
+
+    _setTaskModalMode(document.getElementById('task-modal-action-type').value);
+    modal.classList.remove('hidden');
+}
+
+function closeTaskModal() {
+    document.getElementById('task-modal-overlay').classList.add('hidden');
+}
+
+function _schedulerRequest(method, payload) {
+    return fetch('/api/scheduler', {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    }).then(r => r.json());
+}
+
+function saveTask() {
+    const taskId = document.getElementById('task-modal-id').value.trim();
+    const actionType = document.getElementById('task-modal-action-type').value;
+    const payload = {
+        name: document.getElementById('task-modal-name').value.trim(),
+        enabled: document.getElementById('task-modal-enabled').checked,
+        action_type: actionType,
+        content: document.getElementById('task-modal-content').value.trim(),
+        schedule_type: document.getElementById('task-modal-schedule-type').value,
+        schedule_value: document.getElementById('task-modal-schedule-value').value.trim(),
+        receiver: document.getElementById('task-modal-receiver').value.trim() || sessionId,
+        receiver_name: document.getElementById('task-modal-receiver-name').value.trim() || sessionId,
+        channel_type: document.getElementById('task-modal-channel-type').value,
+        is_group: false,
+    };
+
+    if (!payload.name || !payload.content || !payload.schedule_value) return;
+
+    const method = taskId ? 'PUT' : 'POST';
+    if (taskId) payload.task_id = taskId;
+
+    _schedulerRequest(method, payload).then(data => {
+        if (data.status !== 'success') return;
+        closeTaskModal();
+        tasksLoaded = false;
+        loadTasksView(true);
+    }).catch(() => {});
+}
+
+function deleteTask(taskId) {
+    const task = tasksCache.find(t => String(t.id) === String(taskId));
+    showConfirmDialog({
+        title: t('tasks_delete'),
+        message: _taskText(
+            `确认删除任务「${task ? task.name || taskId : taskId}」？`,
+            `Delete task "${task ? task.name || taskId : taskId}"?`
+        ),
+        okText: t('confirm_yes'),
+        cancelText: t('confirm_cancel'),
+        onConfirm: () => {
+            _schedulerRequest('DELETE', { task_id: taskId }).then(data => {
+                if (data.status !== 'success') return;
+                tasksLoaded = false;
+                loadTasksView(true);
+            }).catch(() => {});
+        },
+    });
+}
+
+function toggleTaskEnabled(taskId) {
+    const task = tasksCache.find(t => String(t.id) === String(taskId));
+    if (!task) return;
+    const nextEnabled = !(task.enabled !== false);
+    _schedulerRequest('PUT', { task_id: taskId, enabled: nextEnabled }).then(data => {
+        if (data.status !== 'success') return;
+        tasksLoaded = false;
+        loadTasksView(true);
+    }).catch(() => {});
+}
+
+function loadTasksView(force = false) {
+    if (tasksLoaded && !force) return;
     fetch('/api/scheduler').then(r => r.json()).then(data => {
         if (data.status !== 'success') return;
         const emptyEl = document.getElementById('tasks-empty');
         const listEl = document.getElementById('tasks-list');
-        const allTasks = data.tasks || [];
-        // Only show active (enabled) tasks
-        const tasks = allTasks.filter(t => t.enabled !== false);
-        if (tasks.length === 0) {
+        tasksCache = Array.isArray(data.tasks) ? data.tasks : [];
+
+        if (tasksCache.length === 0) {
+            emptyEl.classList.remove('hidden');
+            listEl.classList.add('hidden');
             emptyEl.querySelector('p').textContent = currentLang === 'zh' ? '暂无定时任务' : 'No scheduled tasks';
+            tasksLoaded = true;
             return;
         }
+
         emptyEl.classList.add('hidden');
         listEl.classList.remove('hidden');
         listEl.innerHTML = '';
 
-        tasks.forEach(task => {
+        tasksCache.forEach(task => {
             const card = document.createElement('div');
-            card.className = 'bg-white dark:bg-[#1A1A1A] rounded-xl border border-slate-200 dark:border-white/10 p-4';
-            const typeLabel = task.type === 'cron'
-                ? `<span class="text-xs font-mono text-slate-400">${escapeHtml(task.cron || '')}</span>`
-                : `<span class="text-xs text-slate-400">${escapeHtml(task.type || 'once')}</span>`;
-            let nextRun = '--';
-            if (task.next_run_at) {
-                // next_run_at is an ISO string, not a Unix timestamp
-                const d = new Date(task.next_run_at);
-                if (!isNaN(d.getTime())) nextRun = d.toLocaleString();
-            }
+            const enabled = task.enabled !== false;
+            card.className = 'bg-white dark:bg-[#1A1A1A] rounded-xl border border-slate-200 dark:border-white/10 p-4 shadow-sm';
+
+            const statusClass = enabled
+                ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20 dark:text-emerald-400'
+                : 'bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-400';
+
+            const nextRun = _formatTaskNextRun(task);
+            const scheduleText = _formatTaskSchedule(task);
+            const actionText = _formatTaskAction(task);
+            const receiverText = escapeHtml((task.action && (task.action.receiver_name || task.action.receiver)) || '--');
+            const summaryText = escapeHtml((task.action && (task.action.content || task.action.task_description)) || '');
+
             card.innerHTML = `
-                <div class="flex items-center gap-2 mb-2">
-                    <span class="w-2 h-2 rounded-full bg-primary-400"></span>
-                    <span class="font-medium text-sm text-slate-700 dark:text-slate-200">${escapeHtml(task.name || task.id || '--')}</span>
-                    <div class="flex-1"></div>
-                    ${typeLabel}
+                <div class="flex items-start gap-3 mb-3">
+                    <div class="w-2.5 h-2.5 rounded-full ${enabled ? 'bg-primary-400' : 'bg-slate-300 dark:bg-slate-600'} mt-2"></div>
+                    <div class="min-w-0 flex-1">
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <span class="font-medium text-sm text-slate-700 dark:text-slate-200 truncate">${escapeHtml(task.name || task.id || '--')}</span>
+                            <span class="px-2 py-0.5 rounded-full text-[11px] font-medium ${statusClass}">${enabled ? t('tasks_status_enabled') : t('tasks_status_disabled')}</span>
+                            <span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-400">${escapeHtml(actionText)}</span>
+                        </div>
+                        <p class="text-xs text-slate-500 dark:text-slate-400 mt-1 line-clamp-2">${summaryText || '--'}</p>
+                    </div>
+                    <div class="flex items-center gap-1 flex-shrink-0">
+                        <button type="button" class="task-edit-btn p-1.5 rounded-lg text-slate-400 hover:text-primary-500 hover:bg-primary-50 dark:hover:bg-primary-900/20 cursor-pointer transition-colors" title="${escapeHtml(t('tasks_edit'))}">
+                            <i class="fas fa-pen text-xs"></i>
+                        </button>
+                        <button type="button" class="task-toggle-btn p-1.5 rounded-lg text-slate-400 hover:text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-900/20 cursor-pointer transition-colors" title="${escapeHtml(enabled ? t('tasks_disable') : t('tasks_enable'))}">
+                            <i class="fas ${enabled ? 'fa-pause' : 'fa-play'} text-xs"></i>
+                        </button>
+                        <button type="button" class="task-delete-btn p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 cursor-pointer transition-colors" title="${escapeHtml(t('tasks_delete'))}">
+                            <i class="fas fa-trash text-xs"></i>
+                        </button>
+                    </div>
                 </div>
-                <p class="text-xs text-slate-500 dark:text-slate-400 mb-2 line-clamp-2">${escapeHtml(task.prompt || task.description || '')}</p>
-                <div class="flex items-center gap-4 text-xs text-slate-400 dark:text-slate-500">
-                    <span><i class="fas fa-clock mr-1"></i>${currentLang === 'zh' ? '下次执行' : 'Next run'}: ${nextRun}</span>
+                <div class="grid gap-2 text-xs text-slate-400 dark:text-slate-500 sm:grid-cols-2">
+                    <div><i class="fas fa-clock mr-1"></i>${_taskText('调度', 'Schedule')}: ${escapeHtml(scheduleText)}</div>
+                    <div><i class="fas fa-hourglass-half mr-1"></i>${_taskText('下次执行', 'Next run')}: ${escapeHtml(nextRun)}</div>
+                    <div><i class="fas fa-user mr-1"></i>${_taskText('接收者', 'Receiver')}: ${receiverText}</div>
+                    <div><i class="fas fa-circle-info mr-1"></i>${_taskText('任务ID', 'Task ID')}: ${escapeHtml(task.id || '--')}</div>
                 </div>`;
+
+            const editBtn = card.querySelector('.task-edit-btn');
+            const toggleBtn = card.querySelector('.task-toggle-btn');
+            const deleteBtn = card.querySelector('.task-delete-btn');
+            editBtn.addEventListener('click', () => openTaskModal(task.id));
+            toggleBtn.addEventListener('click', () => toggleTaskEnabled(task.id));
+            deleteBtn.addEventListener('click', () => deleteTask(task.id));
             listEl.appendChild(card);
         });
+
         tasksLoaded = true;
     }).catch(() => {});
 }
