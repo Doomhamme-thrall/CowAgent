@@ -58,6 +58,12 @@ const I18N = {
         tools_section_title: '内置工具', tools_loading: '加载工具中...',
         skills_section_title: '技能', skill_enable: '启用', skill_disable: '禁用',
         skill_toggle_error: '操作失败，请稍后再试',
+        skills_add: '新增技能', skills_edit: '编辑技能', skills_delete: '删除技能',
+        skills_field_desc: '技能描述', skills_field_content: 'Skill 内容（Markdown）',
+        skills_source_builtin: '内置', skills_source_custom: '自定义',
+        skills_name_hint: '技能名称将作为目录名，创建后不可修改',
+        skills_delete_confirm: '确认删除技能「{name}」？',
+        skills_save_error: '保存失败，请稍后再试',
         memory_title: '记忆管理', memory_desc: '查看 Agent 记忆文件和内容',
         memory_agent_label: 'Agent',
         memory_tab_files: '记忆文件', memory_tab_dreams: '梦境日记',
@@ -186,6 +192,12 @@ const I18N = {
         tools_section_title: 'Built-in Tools', tools_loading: 'Loading tools...',
         skills_section_title: 'Skills', skill_enable: 'Enable', skill_disable: 'Disable',
         skill_toggle_error: 'Operation failed, please try again',
+        skills_add: 'Add Skill', skills_edit: 'Edit Skill', skills_delete: 'Delete Skill',
+        skills_field_desc: 'Description', skills_field_content: 'Skill Content (Markdown)',
+        skills_source_builtin: 'Built-in', skills_source_custom: 'Custom',
+        skills_name_hint: 'The skill name will be used as the directory name and cannot be changed after creation',
+        skills_delete_confirm: 'Delete skill "{name}"?',
+        skills_save_error: 'Save failed, please try again',
         memory_title: 'Memory', memory_desc: 'View agent memory files and contents',
         memory_agent_label: 'Agent',
         memory_tab_files: 'Memory Files', memory_tab_dreams: 'Dream Diary',
@@ -3939,6 +3951,9 @@ function loadToolsSection() {
     });
 }
 
+let skillsCache = [];
+let skillModalBound = false;
+
 function loadSkillsSection() {
     const emptyEl = document.getElementById('skills-empty');
     const listEl = document.getElementById('skills-list');
@@ -3947,54 +3962,76 @@ function loadSkillsSection() {
     fetch('/api/skills').then(r => r.json()).then(data => {
         if (data.status !== 'success') return;
         const skills = data.skills || [];
+        skillsCache = skills;
         if (skills.length === 0) {
+            emptyEl.classList.remove('hidden');
+            listEl.classList.add('hidden');
             const p = emptyEl.querySelector('p');
             if (p) p.textContent = currentLang === 'zh' ? '暂无技能' : 'No skills found';
+            const desc = emptyEl.querySelector('p + p');
+            if (desc) desc.textContent = currentLang === 'zh' ? '你还没有安装任何技能，点击上方「新增技能」按钮创建第一个' : "You haven't installed any skills. Click 'Add Skill' to create your first one";
             return;
         }
         badge.textContent = skills.length;
         badge.classList.remove('hidden');
         emptyEl.classList.add('hidden');
+        listEl.classList.remove('hidden');
         listEl.innerHTML = '';
 
         skills.forEach(sk => {
+            const enabled = sk.enabled !== false;
+            const isBuiltin = sk.source === 'builtin';
+            const statusClass = enabled
+                ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20 dark:text-emerald-400'
+                : 'bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-400';
+            const sourceClass = isBuiltin
+                ? 'bg-blue-50 text-blue-500 dark:bg-blue-900/20 dark:text-blue-400'
+                : 'bg-amber-50 text-amber-600 dark:bg-amber-900/20 dark:text-amber-400';
+
             const card = document.createElement('div');
-            card.className = 'bg-white dark:bg-[#1A1A1A] rounded-xl border border-slate-200 dark:border-white/10 p-4 flex items-start gap-3 transition-opacity';
+            card.className = 'bg-white dark:bg-[#1A1A1A] rounded-xl border border-slate-200 dark:border-white/10 p-4 shadow-sm';
             card.dataset.skillName = sk.name;
             card.dataset.skillDesc = sk.description || '';
-            card.dataset.enabled = sk.enabled ? '1' : '0';
-            renderSkillCard(card, sk);
+            card.dataset.enabled = enabled ? '1' : '0';
+
+            card.innerHTML = `
+                <div class="flex items-start gap-3 mb-3">
+                    <div class="w-9 h-9 rounded-lg bg-amber-50 dark:bg-amber-900/20 flex items-center justify-center flex-shrink-0">
+                        <i class="fas fa-bolt ${enabled ? 'text-primary-400' : 'text-slate-300 dark:text-slate-600'} text-sm"></i>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <span class="font-medium text-sm text-slate-700 dark:text-slate-200 truncate">${escapeHtml(sk.display_name || sk.name)}</span>
+                            <span class="px-2 py-0.5 rounded-full text-[11px] font-medium ${statusClass}">${enabled ? t('tasks_status_enabled') : t('tasks_status_disabled')}</span>
+                            <span class="px-2 py-0.5 rounded-full text-[11px] font-medium ${sourceClass}">${isBuiltin ? t('skills_source_builtin') : t('skills_source_custom')}</span>
+                        </div>
+                        <p class="text-xs text-slate-400 dark:text-slate-500 mt-1 line-clamp-2">${escapeHtml(sk.description || '--')}</p>
+                    </div>
+                    <div class="flex items-center gap-1 flex-shrink-0">
+                        <button type="button" role="switch" aria-checked="${enabled}"
+                                onclick="toggleSkill('${escapeHtml(sk.name)}', ${enabled})"
+                                class="relative inline-flex h-4 w-7 flex-shrink-0 cursor-pointer rounded-full transition-colors duration-200 ease-in-out focus:outline-none ${enabled ? 'bg-primary-400' : 'bg-slate-200 dark:bg-slate-700'}"
+                                title="${enabled ? (currentLang === 'zh' ? '点击禁用' : 'Click to disable') : (currentLang === 'zh' ? '点击启用' : 'Click to enable')}">
+                            <span class="inline-block h-3 w-3 mt-0.5 rounded-full bg-white shadow transform transition-transform duration-200 ease-in-out ${enabled ? 'translate-x-3' : 'translate-x-0.5'}"></span>
+                        </button>
+                        ${isBuiltin ? '' : `
+                        <button type="button" class="skill-edit-btn p-1.5 rounded-lg text-slate-400 hover:text-primary-500 hover:bg-primary-50 dark:hover:bg-primary-900/20 cursor-pointer transition-colors" title="${escapeHtml(t('skills_edit'))}">
+                            <i class="fas fa-pen text-xs"></i>
+                        </button>
+                        <button type="button" class="skill-delete-btn p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 cursor-pointer transition-colors" title="${escapeHtml(t('skills_delete'))}">
+                            <i class="fas fa-trash text-xs"></i>
+                        </button>
+                        `}
+                    </div>
+                </div>`;
+
+            const editBtn = card.querySelector('.skill-edit-btn');
+            const deleteBtn = card.querySelector('.skill-delete-btn');
+            if (editBtn) editBtn.addEventListener('click', () => openSkillModal(sk.name));
+            if (deleteBtn) deleteBtn.addEventListener('click', () => deleteSkill(sk.name));
             listEl.appendChild(card);
         });
     }).catch(() => {});
-}
-
-function renderSkillCard(card, sk) {
-    const enabled = sk.enabled;
-    const iconColor = enabled ? 'text-primary-400' : 'text-slate-300 dark:text-slate-600';
-    const trackClass = enabled
-        ? 'bg-primary-400'
-        : 'bg-slate-200 dark:bg-slate-700';
-    const thumbTranslate = enabled ? 'translate-x-3' : 'translate-x-0.5';
-    card.innerHTML = `
-        <div class="w-9 h-9 rounded-lg bg-amber-50 dark:bg-amber-900/20 flex items-center justify-center flex-shrink-0">
-            <i class="fas fa-bolt ${iconColor} text-sm"></i>
-        </div>
-        <div class="flex-1 min-w-0">
-            <div class="flex items-center gap-2 mb-1">
-                <span class="font-medium text-sm text-slate-700 dark:text-slate-200 truncate flex-1">${escapeHtml(sk.display_name || sk.name)}</span>
-                <button
-                    role="switch"
-                    aria-checked="${enabled}"
-                    onclick="toggleSkill('${escapeHtml(sk.name)}', ${enabled})"
-                    class="relative inline-flex h-4 w-7 flex-shrink-0 cursor-pointer rounded-full transition-colors duration-200 ease-in-out focus:outline-none ${trackClass}"
-                    title="${enabled ? (currentLang === 'zh' ? '点击禁用' : 'Click to disable') : (currentLang === 'zh' ? '点击启用' : 'Click to enable')}"
-                >
-                    <span class="inline-block h-3 w-3 mt-0.5 rounded-full bg-white shadow transform transition-transform duration-200 ease-in-out ${thumbTranslate}"></span>
-                </button>
-            </div>
-            <p class="text-xs text-slate-400 dark:text-slate-500 line-clamp-2">${escapeHtml(sk.description || '--')}</p>
-        </div>`;
 }
 
 function toggleSkill(name, currentlyEnabled) {
@@ -4014,10 +4051,140 @@ function toggleSkill(name, currentlyEnabled) {
                 const desc = card.dataset.skillDesc || '';
                 card.dataset.enabled = currentlyEnabled ? '0' : '1';
                 card.style.opacity = '1';
-                renderSkillCard(card, { name, description: desc, enabled: !currentlyEnabled });
+                // Refresh the whole section to get updated state
+                loadSkillsSection();
             }
         } else {
             if (card) card.style.opacity = '1';
+        }
+    })
+    .catch(() => { if (card) card.style.opacity = '1'; });
+}
+
+// ------------------------------------------------------------------
+// Skill Modal CRUD
+// ------------------------------------------------------------------
+function _bindSkillModalEvents() {
+    if (skillModalBound) return;
+    skillModalBound = true;
+}
+
+function openSkillModal(skillName = '') {
+    _bindSkillModalEvents();
+
+    const modal = document.getElementById('skill-modal-overlay');
+    const title = document.getElementById('skill-modal-title');
+    const nameInput = document.getElementById('skill-modal-display-name');
+    const nameHint = document.getElementById('skill-modal-name-hint');
+    const hiddenName = document.getElementById('skill-modal-name');
+    const descInput = document.getElementById('skill-modal-desc');
+    const contentInput = document.getElementById('skill-modal-content');
+    const enabledCheck = document.getElementById('skill-modal-enabled');
+    const sourceBadge = document.getElementById('skill-modal-source-badge');
+
+    const skill = skillName ? skillsCache.find(s => s.name === skillName) : null;
+
+    if (skill) {
+        // Edit mode
+        title.textContent = t('skills_edit');
+        title.dataset.i18n = 'skills_edit';
+        hiddenName.value = skill.name;
+        nameInput.value = skill.display_name || skill.name;
+        nameInput.readOnly = true;
+        nameInput.classList.add('opacity-60');
+        nameHint.classList.remove('hidden');
+        descInput.value = skill.description || '';
+        contentInput.value = skill.content || '';
+        enabledCheck.checked = skill.enabled !== false;
+
+        // Show source badge
+        const isBuiltin = skill.source === 'builtin';
+        if (isBuiltin) {
+            sourceBadge.textContent = t('skills_source_builtin');
+            sourceBadge.classList.remove('hidden');
+        } else {
+            sourceBadge.textContent = t('skills_source_custom');
+            sourceBadge.classList.remove('hidden');
+        }
+    } else {
+        // Add mode
+        title.textContent = t('skills_add');
+        title.dataset.i18n = 'skills_add';
+        hiddenName.value = '';
+        nameInput.value = '';
+        nameInput.readOnly = false;
+        nameInput.classList.remove('opacity-60');
+        nameHint.classList.remove('hidden');
+        descInput.value = '';
+        contentInput.value = '';
+        enabledCheck.checked = true;
+        sourceBadge.classList.add('hidden');
+    }
+
+    modal.classList.remove('hidden');
+}
+
+function closeSkillModal() {
+    document.getElementById('skill-modal-overlay').classList.add('hidden');
+}
+
+function _skillRequest(method, payload) {
+    return fetch('/api/skills', {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    }).then(r => r.json());
+}
+
+function saveSkill() {
+    const hiddenName = document.getElementById('skill-modal-name').value.trim();
+    const nameInput = document.getElementById('skill-modal-display-name').value.trim();
+    const desc = document.getElementById('skill-modal-desc').value.trim();
+    const content = document.getElementById('skill-modal-content').value.trim();
+    const enabled = document.getElementById('skill-modal-enabled').checked;
+
+    const isEdit = !!hiddenName;
+    const name = isEdit ? hiddenName : nameInput;
+
+    if (!name) return;
+    if (!isEdit && !content) return;
+
+    if (isEdit) {
+        // Update existing skill
+        const payload = { name, description: desc, enabled };
+        if (content) payload.content = content;
+        _skillRequest('PUT', payload).then(data => {
+            if (data.status !== 'success') return;
+            closeSkillModal();
+            loadSkillsSection();
+        }).catch(() => {});
+    } else {
+        // Create new skill
+        const payload = { action: 'create', name, description: desc, content };
+        _skillRequest('POST', payload).then(data => {
+            if (data.status !== 'success') return;
+            closeSkillModal();
+            loadSkillsSection();
+        }).catch(() => {});
+    }
+}
+
+function deleteSkill(skillName) {
+    const skill = skillsCache.find(s => s.name === skillName);
+    showConfirmDialog({
+        title: t('skills_delete'),
+        message: (currentLang === 'zh' ? `确认删除技能「${skill ? (skill.display_name || skill.name) : skillName}」？` : `Delete skill "${skill ? (skill.display_name || skill.name) : skillName}"?`),
+        okText: t('confirm_yes'),
+        cancelText: t('confirm_cancel'),
+        onConfirm: () => {
+            _skillRequest('DELETE', { name: skillName }).then(data => {
+                if (data.status !== 'success') return;
+                skillsCache = skillsCache.filter(s => s.name !== skillName);
+                loadSkillsSection();
+            }).catch(() => {});
+        },
+    });
+}
             alert(currentLang === 'zh' ? '操作失败，请稍后再试' : 'Operation failed, please try again');
         }
     })

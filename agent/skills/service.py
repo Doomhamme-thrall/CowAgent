@@ -41,12 +41,23 @@ class SkillService:
         """
         Query all skills and return a serialisable list.
         Reads from skills_config.json (refreshes from disk if needed).
+        Includes SKILL.md content for custom skills.
 
         :return: list of skill info dicts
         """
         self.manager.refresh_skills()
         config = self.manager.get_skills_config()
         result = list(config.values())
+
+        # Attach raw content for custom skills (read from SKILL.md)
+        for skill_dict in result:
+            name = skill_dict.get("name")
+            source = skill_dict.get("source", "")
+            if source != "builtin" and name:
+                entry = self.manager.get_skill(name)
+                if entry and entry.skill and entry.skill.content:
+                    skill_dict["content"] = entry.skill.content
+
         logger.info(f"[SkillService] query: {len(result)} skills found")
         return result
 
@@ -203,6 +214,47 @@ class SkillService:
             raise ValueError("skill name is required")
         self.manager.set_skill_enabled(name, enabled=False)
         logger.info(f"[SkillService] close: skill '{name}' disabled")
+
+    # ------------------------------------------------------------------
+    # create (local)
+    # ------------------------------------------------------------------
+    def create(self, payload: dict) -> dict:
+        """
+        Create a new custom skill locally (from WebUI form).
+
+        :param payload: {"name": ..., "description": ..., "content": ...}
+        :return: skill metadata dict
+        """
+        name = payload.get("name")
+        if not name:
+            raise ValueError("skill name is required")
+        description = payload.get("description", "").strip()
+        content = payload.get("content", "").strip()
+        if not content:
+            raise ValueError("skill content cannot be empty")
+        return self.manager.create_skill(name, description, content)
+
+    # ------------------------------------------------------------------
+    # update (local)
+    # ------------------------------------------------------------------
+    def update(self, payload: dict) -> dict:
+        """
+        Update an existing custom skill's metadata and/or content.
+
+        :param payload: {"name": ..., "description": ..., "content": ..., "enabled": ...}
+        :return: updated skill metadata dict
+        """
+        name = payload.get("name")
+        if not name:
+            raise ValueError("skill name is required")
+        updates = {}
+        if "description" in payload:
+            updates["description"] = payload["description"]
+        if "content" in payload:
+            updates["content"] = payload["content"]
+        if "enabled" in payload:
+            updates["enabled"] = payload["enabled"]
+        return self.manager.update_skill(name, updates)
 
     # ------------------------------------------------------------------
     # delete

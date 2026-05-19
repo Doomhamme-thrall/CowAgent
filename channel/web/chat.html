@@ -842,11 +842,18 @@
                                     <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100" data-i18n="skills_title">技能管理</h2>
                                     <p class="text-sm text-slate-500 dark:text-slate-400 mt-1" data-i18n="skills_desc">查看、启用或禁用 Agent 技能</p>
                                 </div>
-                                <a href="https://skills.cowagent.ai/" target="_blank"
-                                   class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-primary-500 bg-primary-50 dark:bg-primary-900/20 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors">
-                                    <i class="fas fa-puzzle-piece text-[10px]"></i>
-                                    <span data-i18n="skills_hub_btn">探索技能广场</span>
-                                </a>
+                                <div class="flex items-center gap-2">
+                                    <button type="button" onclick="openSkillModal()"
+                                            class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary-500 hover:bg-primary-600 text-white text-sm font-medium cursor-pointer transition-colors duration-150">
+                                        <i class="fas fa-plus text-xs"></i>
+                                        <span data-i18n="skills_add">新增技能</span>
+                                    </button>
+                                    <a href="https://skills.cowagent.ai/" target="_blank"
+                                       class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-primary-500 bg-primary-50 dark:bg-primary-900/20 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors">
+                                        <i class="fas fa-puzzle-piece text-[10px]"></i>
+                                        <span data-i18n="skills_hub_btn">探索技能广场</span>
+                                    </a>
+                                </div>
                             </div>
 
                             <!-- Built-in Tools Section -->
@@ -877,6 +884,58 @@
                                 </div>
                                 <div id="skills-list" class="grid gap-4 sm:grid-cols-2"></div>
                             </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Skill Modal -->
+                <div id="skill-modal-overlay" class="fixed inset-0 bg-black/50 z-[100] hidden flex items-center justify-center"
+                     onclick="if(event.target===this)closeSkillModal()">
+                    <div class="bg-white dark:bg-[#1A1A1A] rounded-2xl border border-slate-200 dark:border-white/10 shadow-xl w-full max-w-2xl mx-4 overflow-hidden">
+                        <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-white/10">
+                            <h3 id="skill-modal-title" class="font-semibold text-slate-800 dark:text-slate-100 text-base" data-i18n="skills_add">新增技能</h3>
+                            <button onclick="closeSkillModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 cursor-pointer">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        </div>
+                        <div class="p-6 space-y-4">
+                            <input type="hidden" id="skill-modal-name">
+                            <input type="hidden" id="skill-modal-source">
+                            <div>
+                                <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5" data-i18n="tasks_field_name">技能名称</label>
+                                <input id="skill-modal-display-name" type="text"
+                                       class="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-white/5 text-sm text-slate-800 dark:text-slate-100 focus:outline-none focus:border-primary-500 transition-colors"
+                                       placeholder="my-skill">
+                                <p id="skill-modal-name-hint" class="text-xs text-slate-400 dark:text-slate-500 mt-1" data-i18n="skills_name_hint">技能名称将作为目录名，创建后不可修改</p>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5" data-i18n="skills_field_desc">技能描述</label>
+                                <input id="skill-modal-desc" type="text"
+                                       class="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-white/5 text-sm text-slate-800 dark:text-slate-100 focus:outline-none focus:border-primary-500 transition-colors"
+                                       placeholder="Describe the skill">
+                            </div>
+                            <div>
+                                <div class="flex items-center justify-between mb-1.5">
+                                    <label class="block text-sm font-medium text-slate-600 dark:text-slate-400" data-i18n="skills_field_content">Skill 内容（Markdown）</label>
+                                    <span id="skill-modal-source-badge" class="hidden px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-400"></span>
+                                </div>
+                                <textarea id="skill-modal-content" rows="8"
+                                          class="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-white/5 text-sm text-slate-800 dark:text-slate-100 focus:outline-none focus:border-primary-500 transition-colors resize-y font-mono"
+                                          placeholder="# Skill Title\n\nDescribe your skill here..."></textarea>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <input id="skill-modal-enabled" type="checkbox" checked
+                                       class="rounded border-slate-300 text-primary-500 focus:ring-primary-400">
+                                <label for="skill-modal-enabled" class="text-sm font-medium text-slate-600 dark:text-slate-400" data-i18n="tasks_enabled">启用</label>
+                            </div>
+                        </div>
+                        <div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-100 dark:border-white/5">
+                            <button type="button" onclick="closeSkillModal()"
+                                    class="px-4 py-2 rounded-lg border border-slate-200 dark:border-white/10 text-slate-600 dark:text-slate-300 text-sm font-medium hover:bg-slate-50 dark:hover:bg-white/5 cursor-pointer transition-colors"
+                                    data-i18n="confirm_cancel">取消</button>
+                            <button type="button" onclick="saveSkill()"
+                                    class="px-4 py-2 rounded-lg bg-primary-500 hover:bg-primary-600 text-white text-sm font-medium cursor-pointer transition-colors"
+                                    data-i18n="config_save">保存</button>
                         </div>
                     </div>
                 </div>

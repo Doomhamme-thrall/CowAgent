@@ -2201,12 +2201,66 @@ class SkillsHandler:
                 service.open({"name": name})
             elif action == "close":
                 service.close({"name": name})
+            elif action == "create":
+                description = body.get("description", "").strip()
+                content = body.get("content", "").strip()
+                result = service.create({"name": name, "description": description, "content": content})
+                return json.dumps({"status": "success", "skill": result}, ensure_ascii=False)
             else:
                 return json.dumps({"status": "error", "message": f"unknown action: {action}"})
             return json.dumps({"status": "success"}, ensure_ascii=False)
+        except ValueError as e:
+            return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
         except Exception as e:
             logger.error(f"[WebChannel] Skills POST error: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
+
+    def PUT(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            from agent.skills.service import SkillService
+            from agent.skills.manager import SkillManager
+            body = json.loads(web.data())
+            name = body.get("name", "").strip()
+            if not name:
+                return json.dumps({"status": "error", "message": "name is required"})
+            workspace_root = _get_workspace_root()
+            manager = SkillManager(custom_dir=os.path.join(workspace_root, "skills"))
+            service = SkillService(manager)
+            result = service.update(body)
+            return json.dumps({"status": "success", "skill": result}, ensure_ascii=False)
+        except ValueError as e:
+            return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] Skills PUT error: {e}")
+            return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
+
+    def DELETE(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            from agent.skills.service import SkillService
+            from agent.skills.manager import SkillManager
+            body = json.loads(web.data())
+            name = body.get("name", "").strip()
+            if not name:
+                return json.dumps({"status": "error", "message": "name is required"})
+
+            # Prevent deleting builtin skills
+            workspace_root = _get_workspace_root()
+            manager = SkillManager(custom_dir=os.path.join(workspace_root, "skills"))
+            config = manager.get_skills_config()
+            entry = config.get(name, {})
+            if entry.get("source") == "builtin":
+                return json.dumps({"status": "error", "message": "builtin skills cannot be deleted"})
+
+            service = SkillService(manager)
+            service.delete({"name": name})
+            return json.dumps({"status": "success"}, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] Skills DELETE error: {e}")
+            return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
 
 
 class MemoryHandler:

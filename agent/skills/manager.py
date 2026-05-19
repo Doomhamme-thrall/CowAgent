@@ -129,6 +129,127 @@ class SkillManager:
             return True
         return entry.get("enabled", True)
 
+    # ------------------------------------------------------------------
+    # create / update
+    # ------------------------------------------------------------------
+    def create_skill(self, name: str, description: str, content: str) -> dict:
+        """
+        Create a new custom skill by writing a SKILL.md file.
+
+        :param name: skill name (also used as directory name)
+        :param description: short description
+        :param content: full markdown body (frontmatter will be prepended)
+        :return: skill metadata dict
+        :raises ValueError: if name is empty or skill already exists
+        """
+        name = name.strip()
+        if not name:
+            raise ValueError("skill name is required")
+
+        # Check for name collisions across both builtin and custom
+        if name in self.skills_config:
+            raise ValueError(f"skill '{name}' already exists")
+
+        skill_dir = os.path.join(self.custom_dir, name)
+        if os.path.exists(skill_dir):
+            raise ValueError(f"skill directory '{name}' already exists")
+
+        os.makedirs(skill_dir, exist_ok=True)
+
+        # Write SKILL.md with YAML frontmatter
+        skill_md = "---\n"
+        skill_md += f"name: {name}\n"
+        skill_md += f"description: {description}\n"
+        skill_md += "---\n\n"
+        skill_md += content.strip() + "\n"
+
+        skill_md_path = os.path.join(skill_dir, "SKILL.md")
+        with open(skill_md_path, "w", encoding="utf-8") as f:
+            f.write(skill_md)
+
+        # Reload skills so the new one is picked up
+        self.refresh_skills()
+
+        entry = self.skills_config.get(name, {})
+        logger.info(f"[SkillManager] Created skill '{name}' at {skill_md_path}")
+        return entry
+
+    def update_skill(self, name: str, updates: dict) -> dict:
+        """
+        Update an existing custom skill's metadata and/or content.
+
+        :param name: skill name
+        :param updates: dict with optional keys: description, content, enabled
+        :return: updated skill metadata dict
+        :raises ValueError: if skill not found or is builtin
+        """
+        name = name.strip()
+        if name not in self.skills_config:
+            raise ValueError(f"skill '{name}' not found")
+
+        entry = self.skills_config[name]
+
+        # Only custom skills can be edited via this method
+        source = entry.get("source") or ""
+        if source == "builtin":
+            raise ValueError(f"builtin skill '{name}' cannot be edited")
+
+        # Update description in config
+        if "description" in updates:
+            new_desc = (updates["description"] or "").strip()
+            entry["description"] = new_desc
+
+        # Update enabled state in config
+        if "enabled" in updates:
+            entry["enabled"] = bool(updates["enabled"])
+
+        has_content_update = "content" in updates and updates["content"] is not None
+        has_desc_update = "description" in updates
+
+        # Rewrite SKILL.md if description or content changed, so that
+        # refresh_skills() picks up the new values from the file.
+        if has_content_update or has_desc_update:
+            skill_dir = os.path.join(self.custom_dir, name)
+            skill_md_path = os.path.join(skill_dir, "SKILL.md")
+
+            if has_content_update:
+                new_body = (updates["content"] or "").strip()
+            else:
+                # Preserve existing body from the file
+                existing_body = ""
+                if os.path.exists(skill_md_path):
+                    try:
+                        with open(skill_md_path, "r", encoding="utf-8") as f:
+                            raw = f.read()
+                        # Extract body after frontmatter
+                        parts = raw.split("---\n", 2)
+                        if len(parts) >= 3:
+                            existing_body = parts[2].strip()
+                        elif len(parts) == 2 and parts[0] == "":
+                            existing_body = parts[1].strip()
+                        else:
+                            existing_body = raw.strip()
+                    except Exception:
+                        existing_body = ""
+                new_body = existing_body
+
+            md_content = f"---\nname: {name}\n"
+            md_content += f"description: {entry.get('description', '')}\n"
+            md_content += "---\n\n"
+            md_content += new_body + "\n"
+
+            os.makedirs(skill_dir, exist_ok=True)
+            with open(skill_md_path, "w", encoding="utf-8") as f:
+                f.write(md_content)
+
+        self._save_skills_config()
+
+        # Refresh to re-read skill content
+        self.refresh_skills()
+
+        logger.info(f"[SkillManager] Updated skill '{name}'")
+        return dict(self.skills_config.get(name, {}))
+
     def set_skill_enabled(self, name: str, enabled: bool):
         """
         Set a skill's enabled state and persist.
