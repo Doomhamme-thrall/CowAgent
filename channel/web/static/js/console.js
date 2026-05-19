@@ -410,6 +410,50 @@ const md = createMd();
 const VIDEO_EXT_RE = /\.(?:mp4|webm|mov|avi|mkv)$/i;  // tested against URL without query string
 const IMAGE_EXT_RE = /\.(?:jpg|jpeg|png|gif|webp|bmp|svg)$/i;  // tested against URL without query string
 
+function _normalizeMediaUrl(url) {
+    const raw = String(url || '').trim();
+    if (!raw) return raw;
+    if (/^https?:\/\//i.test(raw) || raw.startsWith('/uploads/') || raw.startsWith('/api/file?')) {
+        return raw;
+    }
+    const filePath = raw.startsWith('file://') ? raw.slice(7) : raw;
+    if (filePath.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(filePath)) {
+        return `/api/file?path=${encodeURIComponent(filePath)}`;
+    }
+    return raw;
+}
+
+function _mediaPathForType(url) {
+    try {
+        const parsed = new URL(url, window.location.origin);
+        if (parsed.pathname === '/api/file' && parsed.searchParams.has('path')) {
+            return parsed.searchParams.get('path') || '';
+        }
+        return parsed.pathname || '';
+    } catch (_e) {
+        return url || '';
+    }
+}
+
+function _isImageMedia(url) {
+    return IMAGE_EXT_RE.test(_mediaPathForType(url));
+}
+
+function _isVideoMedia(url) {
+    return VIDEO_EXT_RE.test(_mediaPathForType(url));
+}
+
+function _replaceBracketMediaReferences(text) {
+    if (!text) return text;
+    return text.replace(/\[(图片|视频):\s*([^\]]+)\]/g, (_match, kind, rawPath) => {
+        const mediaUrl = _normalizeMediaUrl(rawPath.trim());
+        if (kind === '图片') {
+            return `![](${mediaUrl})`;
+        }
+        return `[${escapeHtml(rawPath.trim())}](${mediaUrl})`;
+    });
+}
+
 function _buildVideoHtml(url) {
     const fileName = url.split('/').pop().split('?')[0];
     return `<div style="margin:10px 0;">` +
@@ -433,8 +477,11 @@ function _buildImageHtml(url) {
 function injectVideoPlayers(html) {
     // Step 1: replace markdown-it anchor tags whose href points to a video file.
     const step1 = html.replace(
-        /<a\s+href="(https?:\/\/[^"]+)"[^>]*>[^<]*<\/a>/gi,
-        (match, url) => VIDEO_EXT_RE.test(url.split('?')[0]) ? _buildVideoHtml(url) : match
+        /<a\s+href="([^"]+)"[^>]*>[^<]*<\/a>/gi,
+        (match, url) => {
+            const resolvedUrl = _normalizeMediaUrl(url);
+            return _isVideoMedia(resolvedUrl) ? _buildVideoHtml(resolvedUrl) : match;
+        }
     );
     // Step 2: replace any remaining bare video URLs in text nodes (not inside HTML tags).
     // Split on HTML tags to avoid touching src/href attributes already in markup.
@@ -443,7 +490,7 @@ function injectVideoPlayers(html) {
         if (idx % 2 !== 0) return chunk;
         return chunk.replace(/https?:\/\/\S+/gi, (url) => {
             const bare = url.replace(/[),.\s]+$/, '');  // strip trailing punctuation
-            return VIDEO_EXT_RE.test(bare.split('?')[0]) ? _buildVideoHtml(bare) : url;
+            return _isVideoMedia(bare) ? _buildVideoHtml(bare) : url;
         });
     }).join('');
 }
@@ -456,21 +503,26 @@ function injectVideoPlayers(html) {
 function injectImagePreviews(html) {
     // Step 1: anchor whose href points to an image file -> replace with <img> preview.
     const step1 = html.replace(
-        /<a\s+href="(https?:\/\/[^"]+)"[^>]*>[^<]*<\/a>/gi,
-        (match, url) => IMAGE_EXT_RE.test(url.split('?')[0]) ? _buildImageHtml(url) : match
+        /<a\s+href="([^"]+)"[^>]*>[^<]*<\/a>/gi,
+        (match, url) => {
+            const resolvedUrl = _normalizeMediaUrl(url);
+            return _isImageMedia(resolvedUrl) ? _buildImageHtml(resolvedUrl) : match;
+        }
     );
     // Step 2: bare image URLs left in text nodes (rare — markdown-it's linkify usually catches them).
     return step1.split(/(<[^>]+>)/).map((chunk, idx) => {
         if (idx % 2 !== 0) return chunk;
         return chunk.replace(/https?:\/\/\S+/gi, (url) => {
             const bare = url.replace(/[),.\s]+$/, '');
-            return IMAGE_EXT_RE.test(bare.split('?')[0]) ? _buildImageHtml(bare) : url;
+            return _isImageMedia(bare) ? _buildImageHtml(bare) : url;
         });
     }).join('');
 }
 
 function renderMarkdown(text) {
     try {
+        text = _replaceBracketMediaReferences(text);
+
         // Step 1: Extract LaTeX blocks before markdown-it processes them,
         // replacing them with unique placeholders that markdown-it won't mangle.
         const mathStore = [];
