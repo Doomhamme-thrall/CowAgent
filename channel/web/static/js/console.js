@@ -966,10 +966,26 @@ fetch(`/config?_=${Date.now()}`).then(r => r.json()).then(data => {
     if (data.status === 'success') {
         appConfig = data;
         const title = data.title || 'CowAgent';
-        document.getElementById('welcome-title').textContent = title;
-        initConfigView(data);
-        initAgentSelector(data);
-        _ensureSelectedAgentFromSession(sessionId);
+        const welcomeTitle = document.getElementById('welcome-title');
+        if (welcomeTitle) welcomeTitle.textContent = title;
+        try {
+            initConfigView(data);
+        } catch (err) {
+            console.warn('[initApp] initConfigView failed:', err);
+        }
+        try {
+            initAgentSelector(data);
+            _ensureSelectedAgentFromSession(sessionId);
+        } catch (err) {
+            console.warn('[initApp] initAgentSelector failed:', err);
+        }
+    } else {
+        try {
+            initAgentSelector(appConfig);
+            _ensureSelectedAgentFromSession(sessionId);
+        } catch (err) {
+            console.warn('[initApp] fallback initAgentSelector failed:', err);
+        }
     }
     loadHistory(1);
 }).catch(() => { loadHistory(1); });
@@ -4183,14 +4199,6 @@ function deleteSkill(skillName) {
                 loadSkillsSection();
             }).catch(() => {});
         },
-    });
-}
-            alert(currentLang === 'zh' ? '操作失败，请稍后再试' : 'Operation failed, please try again');
-        }
-    })
-    .catch(() => {
-        if (card) card.style.opacity = '1';
-        alert(currentLang === 'zh' ? '操作失败，请稍后再试' : 'Operation failed, please try again');
     });
 }
 
