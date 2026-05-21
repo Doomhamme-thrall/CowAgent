@@ -21,6 +21,7 @@ class SkillManager:
         self,
         builtin_dir: Optional[str] = None,
         custom_dir: Optional[str] = None,
+        skills_config_path: Optional[str] = None,
         config: Optional[Dict] = None,
     ):
         """
@@ -34,7 +35,7 @@ class SkillManager:
         self.builtin_dir = builtin_dir or os.path.join(project_root, 'skills')
         self.custom_dir = custom_dir or os.path.join(project_root, 'workspace', 'skills')
         self.config = config or {}
-        self._skills_config_path = os.path.join(self.custom_dir, SKILLS_CONFIG_FILE)
+        self._skills_config_path = skills_config_path or os.path.join(self.custom_dir, SKILLS_CONFIG_FILE)
 
         # skills_config: full skill metadata keyed by name
         # { "web-fetch": {"name": ..., "description": ..., "source": ..., "enabled": true}, ... }
@@ -73,7 +74,8 @@ class SkillManager:
 
     def _save_skills_config(self):
         """Persist skills_config to custom_dir/skills_config.json."""
-        os.makedirs(self.custom_dir, exist_ok=True)
+        config_dir = os.path.dirname(self._skills_config_path) or self.custom_dir
+        os.makedirs(config_dir, exist_ok=True)
         try:
             with open(self._skills_config_path, "w", encoding="utf-8") as f:
                 json.dump(self.skills_config, f, indent=4, ensure_ascii=False)

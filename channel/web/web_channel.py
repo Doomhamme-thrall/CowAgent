@@ -2142,11 +2142,57 @@ def _resolve_agent_workspace(agent_id: str = "") -> str:
     return os.path.join(base_workspace, "agents", target_agent_id)
 
 
+def _agent_tools_config_path(workspace_root: str) -> str:
+    return os.path.join(workspace_root, "tools", "tools_config.json")
+
+
+def _load_agent_tools_config(workspace_root: str) -> dict:
+    config_path = _agent_tools_config_path(workspace_root)
+    if not os.path.exists(config_path):
+        return {}
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception as e:
+        logger.warning(f"[WebChannel] Failed to load agent tools config: {e}")
+        return {}
+
+
+def _save_agent_tools_config(workspace_root: str, data: dict):
+    config_path = _agent_tools_config_path(workspace_root)
+    os.makedirs(os.path.dirname(config_path), exist_ok=True)
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _get_tool_enabled_for_agent(workspace_root: str, tool_name: str) -> bool:
+    cfg = _load_agent_tools_config(workspace_root)
+    enabled_map = cfg.get("enabled", {})
+    if not isinstance(enabled_map, dict):
+        return True
+    value = enabled_map.get(tool_name)
+    return True if value is None else bool(value)
+
+
+def _set_tool_enabled_for_agent(workspace_root: str, tool_name: str, enabled: bool):
+    cfg = _load_agent_tools_config(workspace_root)
+    enabled_map = cfg.get("enabled")
+    if not isinstance(enabled_map, dict):
+        enabled_map = {}
+    enabled_map[tool_name] = bool(enabled)
+    cfg["enabled"] = enabled_map
+    _save_agent_tools_config(workspace_root, cfg)
+
+
 class ToolsHandler:
     def GET(self):
         _require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
+            params = web.input(agent_id='')
+            effective_agent_id = _normalize_agent_id(params.agent_id, _normalize_agent_id(conf().get("default_agent_id", "main")))
+            workspace_root = _resolve_agent_workspace(effective_agent_id)
             from agent.tools.tool_manager import ToolManager
             tm = ToolManager()
             if not tm.tool_classes:
@@ -2158,27 +2204,64 @@ class ToolsHandler:
                     tools.append({
                         "name": name,
                         "description": instance.description,
+                        "enabled": _get_tool_enabled_for_agent(workspace_root, name),
                     })
                 except Exception:
-                    tools.append({"name": name, "description": ""})
-            return json.dumps({"status": "success", "tools": tools}, ensure_ascii=False)
+                    tools.append({"name": name, "description": "", "enabled": _get_tool_enabled_for_agent(workspace_root, name)})
+            return json.dumps({"status": "success", "agent_id": effective_agent_id, "tools": tools}, ensure_ascii=False)
         except Exception as e:
             logger.error(f"[WebChannel] Tools API error: {e}", exc_info=True)
             return json.dumps({"status": "error", "message": str(e)})
 
+    def POST(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            body = json.loads(web.data() or "{}")
+            name = str(body.get("name") or "").strip()
+            if not name:
+                return json.dumps({"status": "error", "message": "name is required"}, ensure_ascii=False)
+
+            action = str(body.get("action") or "").strip().lower()
+            if "enabled" in body:
+                enabled = bool(body.get("enabled"))
+            elif action in ("open", "enable"):
+                enabled = True
+            elif action in ("close", "disable"):
+                enabled = False
+            else:
+                return json.dumps({"status": "error", "message": "enabled or valid action is required"}, ensure_ascii=False)
+
+            effective_agent_id = _normalize_agent_id(body.get("agent_id"), _normalize_agent_id(conf().get("default_agent_id", "main")))
+            workspace_root = _resolve_agent_workspace(effective_agent_id)
+            _set_tool_enabled_for_agent(workspace_root, name, enabled)
+            return json.dumps({"status": "success", "agent_id": effective_agent_id, "name": name, "enabled": enabled}, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] Tools POST error: {e}", exc_info=True)
+            return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
+
 
 class SkillsHandler:
+    @staticmethod
+    def _create_manager(agent_id: str):
+        from agent.skills.manager import SkillManager
+        shared_workspace_root = _get_workspace_root()
+        shared_skills_dir = os.path.join(shared_workspace_root, "skills")
+        agent_workspace_root = _resolve_agent_workspace(agent_id)
+        skills_config_path = os.path.join(agent_workspace_root, "skills", "skills_config.json")
+        return SkillManager(custom_dir=shared_skills_dir, skills_config_path=skills_config_path)
+
     def GET(self):
         _require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
+            params = web.input(agent_id='')
+            effective_agent_id = _normalize_agent_id(params.agent_id, _normalize_agent_id(conf().get("default_agent_id", "main")))
             from agent.skills.service import SkillService
-            from agent.skills.manager import SkillManager
-            workspace_root = _get_workspace_root()
-            manager = SkillManager(custom_dir=os.path.join(workspace_root, "skills"))
+            manager = self._create_manager(effective_agent_id)
             service = SkillService(manager)
             skills = service.query()
-            return json.dumps({"status": "success", "skills": skills}, ensure_ascii=False)
+            return json.dumps({"status": "success", "agent_id": effective_agent_id, "skills": skills}, ensure_ascii=False)
         except Exception as e:
             logger.error(f"[WebChannel] Skills API error: {e}")
             return json.dumps({"status": "error", "message": str(e)})
@@ -2188,14 +2271,13 @@ class SkillsHandler:
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             from agent.skills.service import SkillService
-            from agent.skills.manager import SkillManager
             body = json.loads(web.data())
+            effective_agent_id = _normalize_agent_id(body.get("agent_id"), _normalize_agent_id(conf().get("default_agent_id", "main")))
             action = body.get("action")
             name = body.get("name")
             if not action or not name:
                 return json.dumps({"status": "error", "message": "action and name are required"})
-            workspace_root = _get_workspace_root()
-            manager = SkillManager(custom_dir=os.path.join(workspace_root, "skills"))
+            manager = self._create_manager(effective_agent_id)
             service = SkillService(manager)
             if action == "open":
                 service.open({"name": name})
@@ -2205,10 +2287,10 @@ class SkillsHandler:
                 description = body.get("description", "").strip()
                 content = body.get("content", "").strip()
                 result = service.create({"name": name, "description": description, "content": content})
-                return json.dumps({"status": "success", "skill": result}, ensure_ascii=False)
+                return json.dumps({"status": "success", "agent_id": effective_agent_id, "skill": result}, ensure_ascii=False)
             else:
                 return json.dumps({"status": "error", "message": f"unknown action: {action}"})
-            return json.dumps({"status": "success"}, ensure_ascii=False)
+            return json.dumps({"status": "success", "agent_id": effective_agent_id}, ensure_ascii=False)
         except ValueError as e:
             return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
         except Exception as e:
@@ -2220,16 +2302,15 @@ class SkillsHandler:
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             from agent.skills.service import SkillService
-            from agent.skills.manager import SkillManager
             body = json.loads(web.data())
+            effective_agent_id = _normalize_agent_id(body.get("agent_id"), _normalize_agent_id(conf().get("default_agent_id", "main")))
             name = body.get("name", "").strip()
             if not name:
                 return json.dumps({"status": "error", "message": "name is required"})
-            workspace_root = _get_workspace_root()
-            manager = SkillManager(custom_dir=os.path.join(workspace_root, "skills"))
+            manager = self._create_manager(effective_agent_id)
             service = SkillService(manager)
             result = service.update(body)
-            return json.dumps({"status": "success", "skill": result}, ensure_ascii=False)
+            return json.dumps({"status": "success", "agent_id": effective_agent_id, "skill": result}, ensure_ascii=False)
         except ValueError as e:
             return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
         except Exception as e:
@@ -2241,15 +2322,14 @@ class SkillsHandler:
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             from agent.skills.service import SkillService
-            from agent.skills.manager import SkillManager
             body = json.loads(web.data())
+            effective_agent_id = _normalize_agent_id(body.get("agent_id"), _normalize_agent_id(conf().get("default_agent_id", "main")))
             name = body.get("name", "").strip()
             if not name:
                 return json.dumps({"status": "error", "message": "name is required"})
 
             # Prevent deleting builtin skills
-            workspace_root = _get_workspace_root()
-            manager = SkillManager(custom_dir=os.path.join(workspace_root, "skills"))
+            manager = self._create_manager(effective_agent_id)
             config = manager.get_skills_config()
             entry = config.get(name, {})
             if entry.get("source") == "builtin":
@@ -2257,7 +2337,7 @@ class SkillsHandler:
 
             service = SkillService(manager)
             service.delete({"name": name})
-            return json.dumps({"status": "success"}, ensure_ascii=False)
+            return json.dumps({"status": "success", "agent_id": effective_agent_id}, ensure_ascii=False)
         except Exception as e:
             logger.error(f"[WebChannel] Skills DELETE error: {e}")
             return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)

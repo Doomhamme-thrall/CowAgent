@@ -64,6 +64,9 @@ const I18N = {
         skills_name_hint: '技能名称将作为目录名，创建后不可修改',
         skills_delete_confirm: '确认删除技能「{name}」？',
         skills_save_error: '保存失败，请稍后再试',
+        skills_agent_label: 'Agent',
+        tools_enable: '启用工具', tools_disable: '禁用工具',
+        tools_toggle_error: '工具开关更新失败，请稍后重试',
         memory_title: '记忆管理', memory_desc: '查看 Agent 记忆文件和内容',
         memory_agent_label: 'Agent',
         memory_tab_files: '记忆文件', memory_tab_dreams: '梦境日记',
@@ -198,6 +201,9 @@ const I18N = {
         skills_name_hint: 'The skill name will be used as the directory name and cannot be changed after creation',
         skills_delete_confirm: 'Delete skill "{name}"?',
         skills_save_error: 'Save failed, please try again',
+        skills_agent_label: 'Agent',
+        tools_enable: 'Enable tool', tools_disable: 'Disable tool',
+        tools_toggle_error: 'Failed to update tool state, please try again',
         memory_title: 'Memory', memory_desc: 'View agent memory files and contents',
         memory_agent_label: 'Agent',
         memory_tab_files: 'Memory Files', memory_tab_dreams: 'Dream Diary',
@@ -3899,6 +3905,7 @@ function saveDefaultModels() {
 
 
 let toolsLoaded = false;
+let toolsLoadedAgentId = '';
 
 const TOOL_ICONS = {
     bash: 'fa-terminal',
@@ -3921,18 +3928,58 @@ function getToolIcon(name) {
     return TOOL_ICONS[name] || 'fa-wrench';
 }
 
+let skillsSelectedAgentId = '';
+
+function _getSkillsAgentOptions() {
+    const source = appConfig || {};
+    return _buildAgentOptions(source).map(item => ({ value: item.value, label: item.label }));
+}
+
+function _ensureSkillsAgentId() {
+    const options = _getSkillsAgentOptions();
+    if (!options.length) {
+        skillsSelectedAgentId = _getDefaultAgentId();
+        return skillsSelectedAgentId;
+    }
+    if (!skillsSelectedAgentId) {
+        skillsSelectedAgentId = _normalizeAgentId(selectedAgentId || _parseAgentIdFromSessionId(sessionId) || _getDefaultAgentId());
+    }
+    if (!options.some(opt => opt.value === skillsSelectedAgentId)) {
+        skillsSelectedAgentId = options[0].value;
+    }
+    return skillsSelectedAgentId;
+}
+
+function initSkillsAgentSelector() {
+    const selectEl = document.getElementById('skills-agent-select');
+    if (!selectEl) return;
+    const options = _getSkillsAgentOptions();
+    if (!options.length) return;
+    const current = _ensureSkillsAgentId();
+    initDropdown(selectEl, options, current, onSkillsAgentSelectChange);
+}
+
+function onSkillsAgentSelectChange(agentId) {
+    skillsSelectedAgentId = _normalizeAgentId(agentId || _getDefaultAgentId());
+    toolsLoaded = false;
+    toolsLoadedAgentId = '';
+    loadSkillsView();
+}
+
 function loadSkillsView() {
+    initSkillsAgentSelector();
     loadToolsSection();
     loadSkillsSection();
 }
 
 function loadToolsSection() {
-    if (toolsLoaded) return;
+    const currentAgentId = _ensureSkillsAgentId();
+    if (toolsLoaded && toolsLoadedAgentId === currentAgentId) return;
     const emptyEl = document.getElementById('tools-empty');
     const listEl = document.getElementById('tools-list');
     const badge = document.getElementById('tools-count-badge');
 
-    fetch('/api/tools').then(r => r.json()).then(data => {
+    fetch(`/api/tools?agent_id=${encodeURIComponent(currentAgentId)}`).then(r => r.json()).then(data => {
         if (data.status !== 'success') return;
         const tools = data.tools || [];
         emptyEl.classList.add('hidden');
@@ -3945,6 +3992,7 @@ function loadToolsSection() {
         badge.classList.remove('hidden');
         listEl.innerHTML = '';
         tools.forEach(tool => {
+            const enabled = tool.enabled !== false;
             const card = document.createElement('div');
             card.className = 'bg-white dark:bg-[#1A1A1A] rounded-xl border border-slate-200 dark:border-white/10 p-4 flex items-start gap-3';
             card.innerHTML = `
@@ -3956,15 +4004,44 @@ function loadToolsSection() {
                         <span class="font-medium text-sm text-slate-700 dark:text-slate-200 font-mono">${escapeHtml(tool.name)}</span>
                     </div>
                     <p class="text-xs text-slate-400 dark:text-slate-500 mt-1 line-clamp-2">${escapeHtml(tool.description || '--')}</p>
+                </div>
+                <div class="flex items-center gap-1 flex-shrink-0">
+                    <button type="button" role="switch" aria-checked="${enabled}"
+                            onclick="toggleTool('${escapeHtml(tool.name)}', ${enabled})"
+                            class="relative inline-flex h-4 w-7 flex-shrink-0 cursor-pointer rounded-full transition-colors duration-200 ease-in-out focus:outline-none ${enabled ? 'bg-primary-400' : 'bg-slate-200 dark:bg-slate-700'}"
+                            title="${enabled ? escapeHtml(t('tools_disable')) : escapeHtml(t('tools_enable'))}">
+                        <span class="inline-block h-3 w-3 mt-0.5 rounded-full bg-white shadow transform transition-transform duration-200 ease-in-out ${enabled ? 'translate-x-3' : 'translate-x-0.5'}"></span>
+                    </button>
                 </div>`;
             listEl.appendChild(card);
         });
         listEl.classList.remove('hidden');
         toolsLoaded = true;
+        toolsLoadedAgentId = currentAgentId;
     }).catch(() => {
         emptyEl.classList.remove('hidden');
         emptyEl.innerHTML = `<span class="text-sm text-slate-400 dark:text-slate-500">${currentLang === 'zh' ? '加载失败' : 'Failed to load'}</span>`;
     });
+}
+
+function toggleTool(name, currentlyEnabled) {
+    const targetEnabled = !currentlyEnabled;
+    fetch('/api/tools', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            name,
+            enabled: targetEnabled,
+            agent_id: _ensureSkillsAgentId(),
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status !== 'success') return;
+        toolsLoaded = false;
+        loadToolsSection();
+    })
+    .catch(() => {});
 }
 
 let skillsCache = [];
@@ -3974,8 +4051,9 @@ function loadSkillsSection() {
     const emptyEl = document.getElementById('skills-empty');
     const listEl = document.getElementById('skills-list');
     const badge = document.getElementById('skills-count-badge');
+    const agentId = _ensureSkillsAgentId();
 
-    fetch('/api/skills').then(r => r.json()).then(data => {
+    fetch(`/api/skills?agent_id=${encodeURIComponent(agentId)}`).then(r => r.json()).then(data => {
         if (data.status !== 'success') return;
         const skills = data.skills || [];
         skillsCache = skills;
@@ -4058,7 +4136,7 @@ function toggleSkill(name, currentlyEnabled) {
     fetch('/api/skills', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, name })
+        body: JSON.stringify({ action, name, agent_id: _ensureSkillsAgentId() })
     })
     .then(r => r.json())
     .then(data => {
@@ -4148,7 +4226,10 @@ function _skillRequest(method, payload) {
     return fetch('/api/skills', {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+            ...payload,
+            agent_id: _ensureSkillsAgentId(),
+        }),
     }).then(r => r.json());
 }
 

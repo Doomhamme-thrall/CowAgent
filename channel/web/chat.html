@@ -842,7 +842,17 @@
                                     <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100" data-i18n="skills_title">技能管理</h2>
                                     <p class="text-sm text-slate-500 dark:text-slate-400 mt-1" data-i18n="skills_desc">查看、启用或禁用 Agent 技能</p>
                                 </div>
-                                <div class="flex items-center gap-2">
+                                <div class="flex items-center gap-3">
+                                    <div class="flex items-center gap-2">
+                                        <span class="text-xs font-medium text-slate-500 dark:text-slate-400" data-i18n="skills_agent_label">Agent</span>
+                                        <div id="skills-agent-select" class="cfg-dropdown cfg-dropdown-up min-w-[150px]" tabindex="0">
+                                            <div class="cfg-dropdown-selected">
+                                                <span class="cfg-dropdown-text">--</span>
+                                                <i class="fas fa-chevron-down cfg-dropdown-arrow"></i>
+                                            </div>
+                                            <div class="cfg-dropdown-menu"></div>
+                                        </div>
+                                    </div>
                                     <button type="button" onclick="openSkillModal()"
                                             class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary-500 hover:bg-primary-600 text-white text-sm font-medium cursor-pointer transition-colors duration-150">
                                         <i class="fas fa-plus text-xs"></i>

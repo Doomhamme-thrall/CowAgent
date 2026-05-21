@@ -6,6 +6,7 @@ import os
 import asyncio
 import datetime
 import time
+import json
 from typing import Optional, List
 
 from agent.protocol import Agent
@@ -416,6 +417,7 @@ class AgentInitializer:
     def _load_tools(self, workspace_root: str, memory_manager, memory_tools: List, session_id: Optional[str] = None):
         """Load all tools"""
         tool_manager = None
+        enabled_map = self._load_agent_tool_enabled_map(workspace_root)
         try:
             from agent.tools import ToolManager
             tool_manager = ToolManager()
@@ -438,6 +440,9 @@ class AgentInitializer:
         if tool_manager:
             for tool_name in tool_manager.tool_classes.keys():
                 try:
+                    if not self._is_tool_enabled_for_agent(tool_name, enabled_map):
+                        continue
+
                     # Skip web_search if no API key is available
                     if tool_name == "web_search":
                         from agent.tools.web_search.web_search import WebSearch
@@ -473,6 +478,27 @@ class AgentInitializer:
             logger.info(f"[AgentInitializer] Loaded {len(tools)} tools: {[t.name for t in tools]}")
         
         return tools
+
+    @staticmethod
+    def _load_agent_tool_enabled_map(workspace_root: str) -> dict:
+        config_path = os.path.join(workspace_root, "tools", "tools_config.json")
+        if not os.path.exists(config_path):
+            return {}
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            enabled_map = data.get("enabled", {}) if isinstance(data, dict) else {}
+            return enabled_map if isinstance(enabled_map, dict) else {}
+        except Exception as e:
+            logger.warning(f"[AgentInitializer] Failed to load agent tool config: {e}")
+            return {}
+
+    @staticmethod
+    def _is_tool_enabled_for_agent(tool_name: str, enabled_map: dict) -> bool:
+        if not isinstance(enabled_map, dict):
+            return True
+        value = enabled_map.get(tool_name)
+        return True if value is None else bool(value)
     
     def _initialize_scheduler(self, tools: List, session_id: Optional[str] = None):
         """Initialize scheduler service if needed"""
@@ -521,7 +547,8 @@ class AgentInitializer:
             shared_workspace = expand_path(conf().get("agent_workspace", "~/cow"))
             shared_skills_dir = os.path.join(shared_workspace, "skills")
             os.makedirs(shared_skills_dir, exist_ok=True)
-            skill_manager = SkillManager(custom_dir=shared_skills_dir)
+            skills_config_path = os.path.join(workspace_root, "skills", "skills_config.json")
+            skill_manager = SkillManager(custom_dir=shared_skills_dir, skills_config_path=skills_config_path)
             return skill_manager
         except Exception as e:
             logger.warning(f"[AgentInitializer] Failed to initialize SkillManager: {e}")
