@@ -3105,7 +3105,13 @@ function formatToolArgs(args) {
 }
 
 function scrollChatToBottom() {
-    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    // 智能滚动：只在用户已位于底部附近时才自动滚动到底部
+    // 如果用户向上滚动浏览历史内容，则不强制滚动
+    const threshold = 150;
+    const atBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight < threshold;
+    if (atBottom) {
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
 }
 
 function applyHighlighting(container) {
