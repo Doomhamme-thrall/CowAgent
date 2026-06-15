@@ -97,6 +97,8 @@ class MoonshotBot(Bot):
         :return: {}
         """
         try:
+            if args is None:
+                args = self.args.copy()
             headers = {
                 "Content-Type": "application/json",
                 "Authorization": "Bearer " + self.api_key

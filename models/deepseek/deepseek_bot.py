@@ -112,6 +112,8 @@ class DeepSeekBot(Bot, OpenAICompatibleBot):
 
     def reply_text(self, session, args=None, retry_count: int = 0) -> dict:
         try:
+            if args is None:
+                args = self.args.copy()
             headers = {
                 "Content-Type": "application/json",
                 "Authorization": "Bearer " + self.api_key,

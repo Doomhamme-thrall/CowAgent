@@ -35,6 +35,23 @@ def _is_valid_generated_title(title: str, result: dict) -> bool:
     return True
 
 
+def _truncate_fallback_title(user_message: str, max_len: int = 30) -> str:
+    """Pick the first non-empty line of the user message and truncate it."""
+    if not user_message:
+        return "New Chat"
+    first_line = ""
+    for line in user_message.splitlines():
+        line = line.strip()
+        if line:
+            first_line = line
+            break
+    if not first_line:
+        return "New Chat"
+    if len(first_line) > max_len:
+        first_line = first_line[:max_len].rstrip() + "..."
+    return first_line
+
+
 def generate_session_title(user_message: str, assistant_reply: str = "") -> str:
     """
     Generate a short session title by calling the current bot's reply_text.
