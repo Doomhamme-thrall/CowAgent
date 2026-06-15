@@ -1115,7 +1115,7 @@ class ConfigHandler:
         "agent_max_context_tokens", "agent_max_context_turns", "agent_max_steps",
         "enable_thinking", "web_password",
         "agent_workspace", "default_agent_id", "agents", "agent_route_rules", "channel_agent_bindings",
-        "default_model_web", "default_model_task", "default_model_qq",
+        "default_model_web", "default_model_task", "default_model",
         "default_model_vision", "default_model_image_generation",
     }
 
@@ -1196,7 +1196,7 @@ class ConfigHandler:
                 "custom_models": masked_custom_models,
                 "default_model_web": local_config.get("default_model_web", ""),
                 "default_model_task": local_config.get("default_model_task", ""),
-                "default_model_qq": local_config.get("default_model_qq", ""),
+                "default_model": local_config.get("default_model", ""),
                 "default_model_vision": local_config.get("default_model_vision", ""),
                 "default_model_image_generation": local_config.get("default_model_image_generation", ""),
             }, ensure_ascii=False)

@@ -127,7 +127,7 @@ const I18N = {
         config_default_models: '默认模型设置',
         config_default_model_web: 'Web 对话默认模型',
         config_default_model_task: '定时任务默认模型',
-        config_default_model_qq: 'QQ 机器人默认模型',
+        config_default_model: '机器人默认模型',
         config_default_model_vision: '图像识别模型',
         config_default_model_image_generation: '图像生成模型',
         config_default_model_hint: '选择「全局」将使用配置文件中的主模型；选择自定义模型配置则优先使用该模型',
@@ -264,7 +264,7 @@ const I18N = {
         config_default_models: 'Default Model Settings',
         config_default_model_web: 'Web Chat Default Model',
         config_default_model_task: 'Scheduled Task Default Model',
-        config_default_model_qq: 'QQ Bot Default Model',
+        config_default_model: 'Bot Default Model',
         config_default_model_vision: 'Image Recognition Model',
         config_default_model_image_generation: 'Image Generation Model',
         config_default_model_hint: 'Selecting "Global" uses the main model from config; selecting a custom model profile uses it preferentially',
@@ -3878,7 +3878,7 @@ function populateDefaultModelSelects(data) {
     const selects = [
         { id: 'cfg-default-model-web', key: 'default_model_web' },
         { id: 'cfg-default-model-task', key: 'default_model_task' },
-        { id: 'cfg-default-model-qq', key: 'default_model_qq' },
+        { id: 'cfg-default-model-other', key: 'default_model' },
         { id: 'cfg-default-model-vision', key: 'default_model_vision' },
         { id: 'cfg-default-model-image-generation', key: 'default_model_image_generation' },
     ];
@@ -3901,7 +3901,7 @@ function saveDefaultModels() {
     const updates = {
         default_model_web: document.getElementById('cfg-default-model-web')?.value || '',
         default_model_task: document.getElementById('cfg-default-model-task')?.value || '',
-        default_model_qq: document.getElementById('cfg-default-model-qq')?.value || '',
+        default_model: document.getElementById('cfg-default-model-other')?.value || '',
         default_model_vision: document.getElementById('cfg-default-model-vision')?.value || '',
         default_model_image_generation: document.getElementById('cfg-default-model-image-generation')?.value || '',
     };

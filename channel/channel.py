@@ -90,8 +90,9 @@ class Channel(object):
                 ct = str(context.get("channel_type", "") or self.channel_type or "").strip().lower()
                 if ct == "web":
                     profile_key = "default_model_web"
-                elif ct == "qq":
-                    profile_key = "default_model_qq"
+                else:
+                    # default_model 作为所有其他通道的通用默认模型
+                    profile_key = "default_model"
 
             if profile_key:
                 profile_id = str(conf().get(profile_key, "") or "").strip()

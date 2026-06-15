@@ -212,7 +212,9 @@ available_setting = {
     "knowledge": True,  # 是否开启知识库功能
     "default_model_web": "",  # Web 对话默认模型（custom_models 的 profile id）
     "default_model_task": "",  # 定时任务默认模型（custom_models 的 profile id）
-    "default_model_qq": "",  # QQ 默认模型（custom_models 的 profile id）
+    "default_model": "",  # 全局机器人默认模型，适用于所有通道（custom_models 的 profile id）
+    # default_model_qq 已废弃，迁移至 default_model
+    "default_model_qq": "",
     "default_model_vision": "",  # 图像识别默认模型（custom_models 的 profile id）
     "default_model_image_generation": "",  # 图像生成默认模型（custom_models 的 profile id）
 }
@@ -330,6 +332,11 @@ def load_config():
 
     # 将json字符串反序列化为dict类型
     config = Config(json.loads(config_str))
+
+    # 向后兼容：迁移 default_model_qq 到 default_model
+    if "default_model_qq" in config and "default_model" not in config:
+        config["default_model"] = config["default_model_qq"]
+        logger.info("[INIT] Migrated config: default_model_qq -> default_model (value: %s)", config["default_model"])
 
     # override config with environment variables.
     # Some online deployment platforms (e.g. Railway) deploy project from github directly. So you shouldn't put your secrets like api key in a config file, instead use environment variables to override the default config.
