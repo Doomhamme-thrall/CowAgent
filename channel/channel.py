@@ -75,13 +75,64 @@ class Channel(object):
         # Check if agent mode is enabled
         use_agent = conf().get("agent", False)
 
+        # Add channel_type to context if not present
+        if context and "channel_type" not in context:
+            context["channel_type"] = self.channel_type
+
+        # Apply channel/task default model profile when caller did
+        # not provide explicit model_override (e.g. QQ default model).
+        # This applies to both agent and non-agent paths.
+        if context and not context.get("model_override"):
+            profile_key = ""
+            if bool(context.get("is_scheduled_task", False)):
+                profile_key = "default_model_task"
+            else:
+                ct = str(context.get("channel_type", "") or self.channel_type or "").strip().lower()
+                if ct == "web":
+                    profile_key = "default_model_web"
+                elif ct == "qq":
+                    profile_key = "default_model_qq"
+
+            if profile_key:
+                profile_id = str(conf().get(profile_key, "") or "").strip()
+                if profile_id:
+                    custom_models = conf().get("custom_models", []) or []
+                    if isinstance(custom_models, list):
+                        profile = next((m for m in custom_models if isinstance(m, dict) and m.get("id") == profile_id), None)
+                        if profile:
+                            model_override = {
+                                "model": profile.get("model") or "",
+                                "api_key": profile.get("api_key") or "",
+                                "api_base": profile.get("api_base") or "",
+                                "provider": profile.get("provider") or "custom",
+                                "profile_id": profile_id,
+                                "profile_key": profile_key,
+                            }
+                            context["model_override"] = model_override
+                            try:
+                                if hasattr(context, "kwargs") and isinstance(context.kwargs, dict):
+                                    context.kwargs["model_override"] = model_override
+                            except Exception:
+                                pass
+                            logger.info(
+                                f"[Channel] Applied {profile_key} profile '{profile_id}' for channel_type="
+                                f"{context.get('channel_type', '')}, model={model_override.get('model', '')}, "
+                                f"provider={model_override.get('provider', '')}"
+                            )
+                        else:
+                            logger.warning(
+                                f"[Channel] {profile_key} points to missing profile_id='{profile_id}' "
+                                f"for channel_type={context.get('channel_type', '')}"
+                            )
+                elif profile_key:
+                    logger.info(
+                        f"[Channel] {profile_key} is empty for channel_type={context.get('channel_type', '')}; "
+                        f"using main model={conf().get('model', '')}"
+                    )
+
         if use_agent:
             try:
                 logger.info("[Channel] Using agent mode")
-
-                # Add channel_type to context if not present
-                if context and "channel_type" not in context:
-                    context["channel_type"] = self.channel_type
 
                 # Ensure agent/session routing metadata exists even when a
                 # channel overrides _compose_context and skips ChatChannel logic.
@@ -132,64 +183,16 @@ class Channel(object):
                     except Exception:
                         pass
 
-                    # Apply channel/task default model profile when caller did
-                    # not provide explicit model_override (e.g. QQ default model).
-                    if not context.get("model_override"):
-                        profile_key = ""
-                        if bool(context.get("is_scheduled_task", False)):
-                            profile_key = "default_model_task"
-                        else:
-                            ct = str(context.get("channel_type", "") or self.channel_type or "").strip().lower()
-                            if ct == "web":
-                                profile_key = "default_model_web"
-                            elif ct == "qq":
-                                profile_key = "default_model_qq"
-
-                        if profile_key:
-                            profile_id = str(conf().get(profile_key, "") or "").strip()
-                            if profile_id:
-                                custom_models = conf().get("custom_models", []) or []
-                                if isinstance(custom_models, list):
-                                    profile = next((m for m in custom_models if isinstance(m, dict) and m.get("id") == profile_id), None)
-                                    if profile:
-                                        model_override = {
-                                            "model": profile.get("model") or "",
-                                            "api_key": profile.get("api_key") or "",
-                                            "api_base": profile.get("api_base") or "",
-                                            "provider": profile.get("provider") or "custom",
-                                            "profile_id": profile_id,
-                                            "profile_key": profile_key,
-                                        }
-                                        context["model_override"] = model_override
-                                        try:
-                                            if hasattr(context, "kwargs") and isinstance(context.kwargs, dict):
-                                                context.kwargs["model_override"] = model_override
-                                        except Exception:
-                                            pass
-                                        logger.info(
-                                            f"[Channel] Applied {profile_key} profile '{profile_id}' for channel_type="
-                                            f"{context.get('channel_type', '')}, model={model_override.get('model', '')}, "
-                                            f"provider={model_override.get('provider', '')}, agent_id={resolved_agent_id}, "
-                                            f"session_key={context.get('session_key', '')}"
-                                        )
-                                    else:
-                                        logger.warning(
-                                            f"[Channel] {profile_key} points to missing profile_id='{profile_id}' "
-                                            f"for channel_type={context.get('channel_type', '')}, agent_id={resolved_agent_id}"
-                                        )
-                            elif profile_key:
-                                logger.info(
-                                    f"[Channel] {profile_key} is empty for channel_type={context.get('channel_type', '')}, "
-                                    f"agent_id={resolved_agent_id}; using main model={conf().get('model', '')}"
-                                )
-                    else:
-                        existing_override = context.get("model_override") or {}
-                        logger.info(
-                            f"[Channel] Using explicit model_override for channel_type={context.get('channel_type', '')}, "
-                            f"agent_id={resolved_agent_id}, model={existing_override.get('model', '')}, "
-                            f"provider={existing_override.get('provider', '')}, "
-                            f"profile_id={existing_override.get('profile_id', '')}"
-                        )
+                # Log if model_override is already present (from frontend or channel default above)
+                if context and context.get("model_override"):
+                    existing_override = context.get("model_override") or {}
+                    logger.info(
+                        f"[Channel] Using model_override for channel_type={context.get('channel_type', '')}, "
+                        f"agent_id={context.get('agent_id', '')}, model={existing_override.get('model', '')}, "
+                        f"provider={existing_override.get('provider', '')}, "
+                        f"profile_id={existing_override.get('profile_id', '')}, "
+                        f"profile_key={existing_override.get('profile_key', '')}"
+                    )
 
                 # Read on_event callback injected by the channel (e.g. web SSE)
                 on_event = context.get("on_event") if context else None
@@ -215,10 +218,17 @@ class Channel(object):
                     f"fallback_main_model={conf().get('model', '')}",
                     exc_info=True,
                 )
-                # Fallback to normal mode if agent fails
+                # Fallback to normal mode if agent fails (model_override is preserved in context)
                 return Bridge().fetch_reply_content(query, context)
         else:
-            # Normal mode
+            # Normal (non-agent) mode
+            # If model_override is set, propagate it to the bot via context keys
+            # that individual bot implementations already respect (e.g. gpt_model
+            # for ChatGPTBot, openai_api_key for per-user overrides).
+            if context and context.get("model_override"):
+                mo = context["model_override"]
+                if mo.get("model") and not context.get("gpt_model"):
+                    context["gpt_model"] = mo["model"]
             return Bridge().fetch_reply_content(query, context)
 
     def build_voice_to_text(self, voice_file) -> Reply:

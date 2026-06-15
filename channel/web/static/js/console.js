@@ -917,6 +917,8 @@ async function loadCustomModels() {
                 if (!still) selectedModelProfile = null;
             }
             updateModelSelectorLabel();
+            // Apply default web model now that models are loaded (if config is available)
+            _applyDefaultWebModel();
             return data.models || [];
         }
     } catch (e) {}
@@ -984,6 +986,13 @@ fetch(`/config?_=${Date.now()}`).then(r => r.json()).then(data => {
             _ensureSelectedAgentFromSession(sessionId);
         } catch (err) {
             console.warn('[initApp] initAgentSelector failed:', err);
+        }
+        // Apply default web model after config is loaded (safe to call
+        // multiple times; models may or may not be ready yet).
+        try {
+            _applyDefaultWebModel();
+        } catch (err) {
+            console.warn('[initApp] _applyDefaultWebModel failed:', err);
         }
     } else {
         try {
@@ -2435,10 +2444,13 @@ async function submitEdit(btn) {
     addUserMessage(newText, ts, [], slotId);
     const loadingEl = addLoadingIndicator();
 
+    const editBody = { session_id: sessionId, message: newText, stream: true, agent_id: selectedAgentId || _getDefaultAgentId() };
+    const editOverride = getModelOverride();
+    if (editOverride) editBody.model_override = editOverride;
     fetch('/message', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId, message: newText, stream: true, agent_id: selectedAgentId || _getDefaultAgentId() }),
+        body: JSON.stringify(editBody),
     })
     .then(r => r.json())
     .then(data => {
