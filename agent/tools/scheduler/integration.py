@@ -144,6 +144,7 @@ def _execute_agent_task(task: dict, agent_bridge):
         # Use Agent to execute the task
         # Mark this as a scheduled task execution to prevent recursive task creation
         context["is_scheduled_task"] = True
+        context["channel_type"] = channel_type
         
         try:
             # Don't clear history - scheduler tasks use isolated session_id so they won't pollute user conversations

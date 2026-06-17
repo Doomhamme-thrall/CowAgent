@@ -545,7 +545,49 @@ class AgentBridge:
                 agent.model.channel_type = context.get("channel_type", "")
                 agent.model.session_id = session_key or ""
                 agent.model.agent_id = agent_id or ""
-                # Apply per-request model override (from chat model selector)
+
+                # Resolve default model profile if no explicit model_override was provided.
+                # This mirrors the logic in Channel.build_reply_content() but is needed here
+                # because scheduled tasks and other direct agent_reply() callers bypass
+                # the channel layer entirely.
+                if not context.get("model_override"):
+                    from config import conf
+                    profile_key = ""
+                    if bool(context.get("is_scheduled_task", False)):
+                        profile_key = "default_model_task"
+                    else:
+                        ct = str(context.get("channel_type", "") or "").strip().lower()
+                        if ct == "web":
+                            profile_key = "default_model_web"
+                        elif ct:
+                            profile_key = "default_model"
+
+                    if profile_key:
+                        profile_id = str(conf().get(profile_key, "") or "").strip()
+                        if profile_id:
+                            custom_models = conf().get("custom_models", []) or []
+                            if isinstance(custom_models, list):
+                                profile = next(
+                                    (m for m in custom_models if isinstance(m, dict) and m.get("id") == profile_id),
+                                    None
+                                )
+                                if profile:
+                                    model_override = {
+                                        "model": profile.get("model") or "",
+                                        "api_key": profile.get("api_key") or "",
+                                        "api_base": profile.get("api_base") or "",
+                                        "provider": profile.get("provider") or "custom",
+                                        "profile_id": profile_id,
+                                        "profile_key": profile_key,
+                                    }
+                                    context["model_override"] = model_override
+                                    logger.info(
+                                        f"[AgentBridge] Applied {profile_key} profile '{profile_id}' "
+                                        f"for channel_type={context.get('channel_type', '')}, "
+                                        f"model={model_override.get('model', '')}"
+                                    )
+
+                # Apply per-request model override (from chat model selector or default profile above)
                 model_override = context.get("model_override")
                 agent.model._current_override = model_override if model_override else None
 
