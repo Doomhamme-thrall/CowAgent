@@ -119,8 +119,9 @@ class SchedulerService:
             if next_run < now:
                 time_diff = (now - next_run).total_seconds()
                 
-                # If overdue by more than 5 minutes, skip this run and schedule next
-                if time_diff > 300:  # 5 minutes
+                # If overdue by more than 12 hours, skip this run and schedule next
+                # Otherwise, let it run now to "catch up" missed tasks after a restart
+                if time_diff > 43200:  # 12 hours
                     logger.warning(f"[Scheduler] Task {task['id']} is overdue by {int(time_diff)}s, skipping and scheduling next run")
                     
                     # For one-time tasks, remove them directly

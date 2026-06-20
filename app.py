@@ -304,6 +304,16 @@ def run():
         _channel_mgr = ChannelManager()
         _channel_mgr.start(channel_names, first_start=True)
 
+        # Eagerly initialize agent and scheduler if enabled
+        if conf().get("agent"):
+            try:
+                from bridge.bridge import Bridge
+                logger.info("[App] Eagerly initializing agent and scheduler...")
+                # This will trigger default agent initialization and start the scheduler service
+                Bridge().get_agent_bridge().get_agent()
+            except Exception as e:
+                logger.warning(f"[App] Failed to eagerly initialize agent: {e}")
+
         while True:
             time.sleep(1)
     except Exception as e:
